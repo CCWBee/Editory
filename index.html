@@ -23,6 +23,7 @@
   <div id="ui">
     <div id="toolbar">
       <button id="btnGenerate">Generate District</button>
+      <button id="btnFrame">Reset View</button>
       <button id="btnReseed">Reseed</button>
       <button id="btnSave">Save JSON</button>
       <label class="pill" title="Drop a JSON here to restore">Drop JSON ↓</label>
@@ -118,10 +119,10 @@
     ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
 
     // Road ring
-    const road = new THREE.Mesh(
-      new THREE.RingGeometry(36, 40, 128, 1),
-      new THREE.MeshStandardMaterial({ color:0x0f1218, roughness:() => 0.6, metalness:0.0 })
-    );
+  const road = new THREE.Mesh(
+  new THREE.RingGeometry(36, 40, 128, 1),
+  new THREE.MeshStandardMaterial({ color:0x0f1218, roughness:0.6, metalness:0.0 })
+);
     road.rotation.x = -Math.PI/2; scene.add(road);
 
     // Pavement
@@ -502,6 +503,12 @@
     cars.oninput = ()=>{ state.params.cars = +cars.value; generateDistrict(); };
 
     document.getElementById('btnGenerate').onclick = generateDistrict;
+    document.getElementById('btnFrame').onclick = ()=>{
+  camera.position.set(38, 24, 48);
+  controls.target.set(0, 3, 0);
+  controls.update();
+};
+
     document.getElementById('btnReseed').onclick = ()=>{ state.seed = Math.floor(Math.random()*1e9)>>>0; generateDistrict(); };
     document.getElementById('btnSave').onclick = ()=>{
       const blob = new Blob([serialize()], {type:'application/json'});
