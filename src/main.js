@@ -1,128 +1,80 @@
-import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js?module';
-import { generateDistrict, rngFor, state, setParam, regenRain, updateSun, carsGroup, districtGroup } from './generator.js';
+import { THREE, renderer, scene, camera, controls, hemi, sun, road, districtGroup, carsGroup, homeCam, onResize } from './scene.js';
+import { state, generateDistrict } from './generator.js';
 import { wireUI } from './ui.js';
 
-// -------- Renderer / scene --------
-const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.35;
-renderer.shadowMap.enabled = true;
-document.body.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0e14);
-
-// Camera and controls
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 2000);
-const controls = new OrbitControls(camera, renderer.domElement);
-function homeCam(){ camera.position.set(38, 24, 48); controls.target.set(0, 3, 0); controls.update(); }
-homeCam();
-
-// Lights
-const hemi = new THREE.HemisphereLight(0xbfd3ff, 0x223344, 0.75); scene.add(hemi);
-const sun  = new THREE.DirectionalLight(0xffffff, 2.1); sun.position.set(30,40,10); sun.castShadow = true;
-sun.shadow.mapSize.set(1024,1024); scene.add(sun);
-
-// Ground, road, pavement
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(400,400), new THREE.MeshStandardMaterial({ color:0x1a1f2a, roughness:0.95 }));
-ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
-
-const road = new THREE.Mesh(new THREE.RingGeometry(36, 40, 128), new THREE.MeshStandardMaterial({ color:0x0f1218, roughness:0.6 }));
-road.rotation.x = -Math.PI/2; road.receiveShadow = true; scene.add(road);
-
-const footpath = new THREE.Mesh(new THREE.RingGeometry(34, 36, 128), new THREE.MeshStandardMaterial({ color:0x252b39, roughness:0.95 }));
-footpath.rotation.x = -Math.PI/2; footpath.receiveShadow = true; scene.add(footpath);
-
-// Drains
-const drainGeom = new THREE.BoxGeometry(0.6, 0.05, 0.2);
-for(let i=0;i<16;i++){
-  const m = new THREE.MeshStandardMaterial({ color:0x22272f, roughness:0.8 });
-  const d = new THREE.Mesh(drainGeom,m);
-  const a = i/16*Math.PI*2; const r = 35.1;
-  d.position.set(Math.cos(a)*r, 0.03, Math.sin(a)*r);
-  d.rotation.y = a; scene.add(d);
-}
-
-// Attach shared groups
-scene.add(districtGroup);
-scene.add(carsGroup);
-
-// Debug helpers to guarantee visibility
-scene.add(new THREE.GridHelper(80, 40, 0x666666, 0x333333));
-scene.add(new THREE.AxesHelper(5));
-
-// WebGL context loss overlay
-const overlay = document.getElementById('overlay');
-renderer.domElement.addEventListener('webglcontextlost', (e)=>{ e.preventDefault(); overlay.style.display='flex'; }, false);
-renderer.domElement.addEventListener('webglcontextrestored', ()=> location.reload(), false);
-
-// Wire UI
-wireUI({
-  onGenerate: ()=>{ generateDistrict(scene); },
-  onReseed: ()=>{ state.seed = (Math.random()*1e9)>>>0; generateDistrict(scene); },
-  onFrame: ()=> homeCam(),
-  onSave: ()=> {
-    const json = JSON.stringify({ version: state.version, seed: state.seed, env: state.env, params: state.params }, null, 2);
-    const blob = new Blob([json], {type:'application/json'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `neo-anglo-norman-${state.seed}.json`; a.click();
-  },
-  onRestore: (obj)=> {
-    state.seed = obj.seed ?? state.seed;
-    if (obj.env) Object.assign(state.env, obj.env);
-    if (obj.params) Object.assign(state.params, obj.params);
-    generateDistrict(scene); regenRain(scene); updateSun(scene, state.env.timeOfDay);
-    homeCam();
-  },
-  onParam: (k,v)=> setParam(k,v, scene)
-});
-
-// First boot: bright day, guaranteed centre buildings
-function boot(){
-  updateSun(scene, state.env.timeOfDay);
-  regenRain(scene);
-  generateDistrict(scene, { forceShowcase:true });
-  homeCam();
-  animate();
-  log('Auto-generated demo on load.');
-}
-boot();
-
-// Animation loop
+// One render loop, one clock — declared BEFORE use
 const clock = new THREE.Clock();
-function carPosAt(t){ const R = 38; const a = t*Math.PI*2; return new THREE.Vector3(Math.cos(a)*R, 0.15, Math.sin(a)*R); }
+
+function updateSunAndWetness(){
+  const tod = state.env.timeOfDay;
+  const theta = (tod/24)*Math.PI*2;
+  const elevRaw = Math.sin(theta)*0.9;
+  const elev = Math.max(0.12, elevRaw);
+  const az = Math.cos(theta)*Math.PI;
+  const dir = new THREE.Vector3(Math.cos(az)*Math.cos(elev), Math.sin(elev), Math.sin(az)*Math.cos(elev));
+  sun.position.copy(dir.multiplyScalar(60));
+  const isNightish = elev<0.2;
+  sun.intensity = isNightish ? 0.35 : 2.2;
+  hemi.intensity = isNightish ? 0.35 : 0.75;
+  const wet = state.env.rain*0.8;
+  road.material.roughness = THREE.MathUtils.clamp(0.7 - wet*0.5, 0.05, 1);
+  road.material.needsUpdate = true;
+  // streetlights (if any)
+  districtGroup.children.forEach(ch=>{
+    if (ch.isPointLight) ch.intensity = isNightish ? 1.2 + Math.sin((performance.now()+ch.userData.flicker)*0.004)*0.2 : 0.0;
+  });
+}
 
 function animate(){
   requestAnimationFrame(animate);
   const dt = Math.min(0.033, clock.getDelta());
   const t = performance.now()*0.001;
 
-  // Cars loop
+  // Simple car loop animation
+  const R = 38;
   for(const car of carsGroup.children){
     car.userData.t = (car.userData.t + dt*0.03*(0.7+Math.sin(t+car.id)*0.3))%1;
-    const p = carPosAt(car.userData.t);
-    const p2 = carPosAt((car.userData.t+0.01)%1);
+    const a = car.userData.t*Math.PI*2;
+    const p = new THREE.Vector3(Math.cos(a)*R, 0.15, Math.sin(a)*R);
+    const p2 = new THREE.Vector3(Math.cos((car.userData.t+0.01)%1*Math.PI*2)*R, 0.15, Math.sin((car.userData.t+0.01)%1*Math.PI*2)*R);
     car.position.copy(p);
-    car.lookAt(p2.x, p2.y, p2.z);
+    car.lookAt(p2);
   }
-
-  // Per-object ticks
-  districtGroup.traverse(o=>{ if (o.userData && o.userData.tick) o.userData.tick(t); });
 
   renderer.render(scene, camera);
 }
 
-// Simple logger
-function log(s){ const el=document.getElementById('log'); if(el) el.textContent=s; }
+function boot(){
+  // Wire UI
+  wireUI({
+    onGenerate: ()=> generateDistrict({ scene, districtGroup, carsGroup }),
+    onReseed: ()=> { state.seed = (Math.random()*1e9)>>>0; generateDistrict({ scene, districtGroup, carsGroup }); },
+    onFrame: ()=> homeCam(),
+    onParam: (k,v)=>{
+      const p = state.params;
+      switch(k){
+        case 'preset': p.preset=v; break;
+        case 'winDensity': p.winDensity=+v; break;
+        case 'roofPitch': p.roofPitch=+v; break;
+        case 'material': p.material=v; break;
+        case 'age': p.age=+v; break;
+        case 'tod': state.env.timeOfDay=+v; updateSunAndWetness(); return;
+        case 'rain': state.env.rain=+v; updateSunAndWetness(); return;
+        case 'cars': p.cars=+v; break;
+      }
+      generateDistrict({ scene, districtGroup, carsGroup });
+    }
+  });
 
-// Window resize
-addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+  // First frame
+  updateSunAndWetness();
+  generateDistrict({ scene, districtGroup, carsGroup });
+  homeCam();
+  animate();
+}
 
-// Expose for the generator
-export { THREE, sun, hemi, road };
+// Resize
+addEventListener('resize', onResize);
+
+// Go
+boot();
