@@ -96,4 +96,78 @@ function makeBuilding(rng, preset, params){
   if (rng.rand()<0.7){
     const w = baseW*rng.range(0.5, 0.85), d = baseD*rng.range(0.5, 0.9), h = storey*rng.range(1,2);
     const dx = rng.range(-0.5,0.5)*(baseW-w)*0.6; const dz = rng.range(-0.5,0.5)*(baseD-d)*0.6;
-    const upper = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), aged(fami
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), aged(familyFor(preset, params.material), params.age));
+    upper.position.set(dx, baseH/2 + h/2, dz); upper.castShadow = upper.receiveShadow = true;
+    g.add(upper);
+  }
+
+  // Windows (instanced)
+  g.add(buildWindowsFor(g, params.winDensity, rng));
+
+  // Simple pitched roof
+  g.add(buildRoofFor(g, THREE.MathUtils.degToRad(params.roofPitch), params));
+
+  return g;
+}
+
+function buildWindowsFor(group, density, rng){
+  const geo = new THREE.PlaneGeometry(0.9,1.3);
+  const mat = new THREE.MeshStandardMaterial({ color:0x9fb6c8, emissive:0x111315, emissiveIntensity:0.7, roughness:0.2, side:THREE.FrontSide });
+  const mesh = new THREE.InstancedMesh(geo, mat, 6000);
+  let idx = 0; const tmp = new THREE.Object3D();
+
+  group.children.forEach(ch=>{
+    if (!ch.isMesh) return;
+    ch.geometry.computeBoundingBox();
+    const size = new THREE.Vector3(); ch.geometry.boundingBox.getSize(size);
+    const floors = Math.max(1, Math.floor(size.y/3.2));
+    const baysX = Math.max(2, Math.floor(size.x/(2.2 - density*1.2)));
+    const baysZ = Math.max(2, Math.floor(size.z/(2.2 - density*1.2)));
+    const faces = [
+      { n:new THREE.Vector3(1,0,0), u:'z', bays:baysZ, width:size.z },
+      { n:new THREE.Vector3(-1,0,0), u:'z', bays:baysZ, width:size.z },
+      { n:new THREE.Vector3(0,0,1), u:'x', bays:baysX, width:size.x },
+      { n:new THREE.Vector3(0,0,-1), u:'x', bays:baysX, width:size.x }
+    ];
+    faces.forEach(f=>{
+      for(let fl=1; fl<floors; fl++){
+        for(let b=0; b<f.bays; b++){
+          if (rng.rand() > density) continue;
+          const frac = (b+0.5)/f.bays;
+          const px = f.u==='x' ? (frac-0.5)*size.x : (f.n.x>0? size.x/2 : -size.x/2);
+          const pz = f.u==='z' ? (frac-0.5)*size.z : (f.n.z>0? size.z/2 : -size.z/2);
+          const py = -size.y/2 + fl*3.2 + 1.6;
+          tmp.position.set(px, py, pz).add(ch.position);
+          tmp.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), f.n);
+          const s = 1 + (rng.rand()*0.18 - 0.08);
+          tmp.scale.set(s, s, 1);
+          tmp.updateMatrix();
+          if (idx<mesh.count) mesh.setMatrixAt(idx++, tmp.matrix);
+        }
+      }
+    });
+  });
+  mesh.count = Math.max(1, idx);
+  mesh.instanceMatrix.needsUpdate = true;
+  return mesh;
+}
+
+function buildRoofFor(group, pitch, params){
+  // Find largest box
+  let base=null, maxVol=-1, size=new THREE.Vector3();
+  group.traverse(o=>{
+    if(o.isMesh){
+      o.geometry.computeBoundingBox(); const s=new THREE.Vector3(); o.geometry.boundingBox.getSize(s);
+      const v=s.x*s.y*s.z; if(v>maxVol){maxVol=v;base=o;size.copy(s)}
+    }
+  });
+  if(!base) return new THREE.Group();
+  const roof = new THREE.Group();
+  const ridgeH = Math.tan(pitch)*(size.x*0.5);
+  const g = new THREE.ConeGeometry(size.x*0.5, ridgeH*2, 4, 1, true);
+  const m = baseMats.slate.clone(); m.roughness = 0.8 - 0.3*(1-params.age);
+  const c = new THREE.Mesh(g,m); c.castShadow = c.receiveShadow = true;
+  c.rotation.z = Math.PI/2; c.scale.set(1,1, size.z/(size.x*0.5));
+  c.position.y = size.y/2 + ridgeH*0.5; roof.add(c);
+  return roof;
+}
