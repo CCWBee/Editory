@@ -1,36 +1,28 @@
-export function wireUI({ onGenerate, onReseed, onFrame, onSave, onRestore, onParam }) {
-  const $ = (id) => document.getElementById(id);
+import { state } from './generator.js';
 
-  // basic button wiring
-  $('btnGenerate')?.addEventListener('click', onGenerate);
-  $('btnReseed')?.addEventListener('click', onReseed);
-  $('btnFrame')?.addEventListener('click', onFrame);
-  $('btnSave')?.addEventListener('click', onSave);
+export function wireUI({ onGenerate, onReseed, onFrame, onParam }){
+  const $ = (id)=> document.getElementById(id);
 
-  // hook up range/select inputs so they forward their values
-  const inputs = document.querySelectorAll('#ui input, #ui select');
-  inputs.forEach((el) => {
-    el.addEventListener('change', (e) => {
-      const target = e.target;
-      onParam?.(target.id, target.value);
-    });
-  });
+  $('btnGenerate').onclick = onGenerate;
+  $('btnReseed').onclick   = onReseed;
+  $('btnFrame').onclick    = onFrame;
 
-  // simple drag-and-drop loader for JSON save files
-  window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('drop', (e) => {
-    e.preventDefault();
-    const file = e.dataTransfer?.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        onRestore?.(data);
-      } catch (err) {
-        console.error('Invalid save JSON', err);
-      }
-    };
-    reader.readAsText(file);
-  });
+  $('preset').onchange     = ()=> onParam('preset', $('preset').value);
+  $('winDensity').oninput  = ()=> onParam('winDensity', +$('winDensity').value);
+  $('roofPitch').oninput   = ()=> onParam('roofPitch', +$('roofPitch').value);
+  $('material').onchange   = ()=> onParam('material', $('material').value);
+  $('age').oninput         = ()=> onParam('age', +$('age').value);
+  $('tod').oninput         = ()=> onParam('tod', +$('tod').value);
+  $('rain').oninput        = ()=> onParam('rain', +$('rain').value);
+  $('cars').oninput        = ()=> onParam('cars', +$('cars').value);
+
+  // Set defaults in UI
+  $('preset').value      = state.params.preset;
+  $('winDensity').value  = state.params.winDensity;
+  $('roofPitch').value   = state.params.roofPitch;
+  $('material').value    = state.params.material;
+  $('age').value         = state.params.age;
+  $('tod').value         = state.env.timeOfDay;
+  $('rain').value        = state.env.rain;
+  $('cars').value        = state.params.cars;
 }
