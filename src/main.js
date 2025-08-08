@@ -1,5 +1,5 @@
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js?module';
 import { generateDistrict, rngFor, state, setParam, regenRain, updateSun, carsGroup, districtGroup } from './generator.js';
 import { wireUI } from './ui.js';
 
