@@ -3,10 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="script-src 'self' https://unpkg.com 'unsafe-eval';">
-  <title>Neo-Anglo-Norman Procedural Editor</title>
+  <title>Editory — Neo-Anglo-Norman</title>
   <style>
-    html,body{margin:0;height:100%;background:#0c0e12;color:#e6e6e6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
+    html,body{margin:0;height:100%;background:#0b0e14;color:#e6e6e6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
     canvas{display:block}
     #ui{position:fixed;top:10px;left:10px;display:grid;gap:8px;background:rgba(12,14,18,.85);backdrop-filter:saturate(1.1) blur(6px);padding:12px 14px;border:1px solid #2a2f3a;border-radius:12px;max-width:360px;z-index:10}
     #ui label{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-size:13px}
@@ -17,18 +16,14 @@
     select{background:#101420;border:1px solid #2a2f3a;color:#e6e6e6;border-radius:8px;padding:4px 6px}
     .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a2f3a;background:#131827;font-size:11px}
     #log{font-size:11px;opacity:.8;white-space:pre-wrap;max-height:110px;overflow:auto}
-    #drop{position:fixed;bottom:10px;left:10px;background:rgba(12,14,18,.8);border:1px dashed #2a2f3a;border-radius:10px;padding:6px 8px;font-size:12px}
-    #overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.65);color:#fff;font:14px/1.4 system-ui}
   </style>
 </head>
 <body>
   <div id="ui">
     <div id="toolbar">
-      <button id="btnGenerate">Generate District</button>
+      <button id="btnGenerate">Generate</button>
       <button id="btnReseed">Reseed</button>
       <button id="btnFrame">Reset View</button>
-      <button id="btnSave">Save JSON</button>
-      <span class="pill" title="Drop a JSON here to restore">Drop JSON ↓</span>
     </div>
     <label>Preset
       <select id="preset">
@@ -68,10 +63,7 @@
     </label>
     <div id="log"></div>
   </div>
-  <div id="drop">Drag a save JSON anywhere in the window to restore</div>
-  <div id="overlay">WebGL context lost. Reload the page.</div>
 
-  <!-- ESM modules. No bundler. -->
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>
