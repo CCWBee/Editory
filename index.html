@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Neo-Anglo-Norman Procedural Editor (Starter)</title>
+  <style>
+    html,body{margin:0;height:100%;background:#0c0e12;color:#e6e6e6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
+    #ui{position:fixed;top:10px;left:10px;display:grid;gap:8px;background:rgba(12,14,18,.8);backdrop-filter:saturate(1.1) blur(6px);padding:12px 14px;border:1px solid #2a2f3a;border-radius:12px;max-width:340px}
+    #ui label{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-size:13px}
+    #ui input[type="range"]{width:160px}
+    #toolbar{display:flex;gap:8px;flex-wrap:wrap}
+    button{background:#1b2130;border:1px solid #2f3a4d;color:#e6e6e6;border-radius:10px;padding:6px 10px;font-size:13px;cursor:pointer}
+    button:hover{background:#222a3b}
+    select{background:#101420;border:1px solid #2a2f3a;color:#e6e6e6;border-radius:8px;padding:4px 6px}
+    #log{font-size:11px;opacity:.8;white-space:pre-wrap;max-height:100px;overflow:auto}
+    #drop{position:fixed;bottom:10px;left:10px;background:rgba(12,14,18,.8);border:1px dashed #2a2f3a;border-radius:10px;padding:6px 8px;font-size:12px}
+    canvas{display:block}
+    .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a2f3a;background:#131827;font-size:11px}
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div id="toolbar">
+      <button id="btnGenerate">Generate District</button>
+      <button id="btnReseed">Reseed</button>
+      <button id="btnSave">Save JSON</button>
+      <label class="pill" title="Drop a JSON here to restore">Drop JSON ↓</label>
+    </div>
+    <label>Preset
+      <select id="preset">
+        <option value="mix">District Mix</option>
+        <option value="terrace">Terrace</option>
+        <option value="house">Contemporary House</option>
+        <option value="civic">Civic</option>
+        <option value="store">Coastal Storehouse</option>
+      </select>
+    </label>
+    <label>Window density
+      <input id="winDensity" type="range" min="0.1" max="0.95" step="0.05" value="0.65">
+    </label>
+    <label>Roof pitch °
+      <input id="roofPitch" type="range" min="5" max="55" step="1" value="38">
+    </label>
+    <label>Material
+      <select id="material">
+        <option value="granite">Pink Granite</option>
+        <option value="render">Lime Render</option>
+        <option value="slate">Slate Panels</option>
+        <option value="timber">Timber+Stone</option>
+        <option value="fibreglass">Fibreglass Inserts</option>
+      </select>
+    </label>
+    <label>Age / weathering
+      <input id="age" type="range" min="0" max="1" step="0.05" value="0.35">
+    </label>
+    <label>Time of day
+      <input id="tod" type="range" min="0" max="24" step="0.1" value="18.3">
+    </label>
+    <label>Rain
+      <input id="rain" type="range" min="0" max="1" step="0.05" value="0.6">
+    </label>
+    <label>Cars
+      <input id="cars" type="range" min="0" max="40" step="1" value="12">
+    </label>
+    <div id="log"></div>
+  </div>
+  <div id="drop">Drag a save JSON anywhere in the window to restore</div>
+
+  <!-- Three.js and helpers from CDN -->
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js';
+    // ---------------------- RNG ----------------------
+    function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+    const seeded = (seed)=>({rand: mulberry32(seed), nextInt(n){return Math.floor(this.rand()*n)}, range(a,b){return a+(b-a)*this.rand()}});
+
+    // ---------------------- Global state ----------------------
+    const state = {
+      version: '0.1.0',
+      seed: Math.floor(Math.random()*1e9)>>>0,
+      env: { timeOfDay: 18.3, rain: 0.6 },
+      params: {
+        preset: 'mix',
+        winDensity: 0.65,
+        roofPitch: 38,
+        material: 'granite',
+        age: 0.35,
+        cars: 12
+      },
+      district: null
+    };
+
+    // ---------------------- Three setup ----------------------
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0e14);
+
+    const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 2000);
+    camera.position.set(38, 24, 48);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 3, 0); controls.update();
+
+    const hemi = new THREE.HemisphereLight(0xbfd3ff, 0x223344, 0.6); scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(30,40,10); sun.castShadow = true;
+    sun.shadow.mapSize.set(1024,1024); scene.add(sun);
+
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(400,400,1,1),
+      new THREE.MeshStandardMaterial({ color:0x1a1f2a, roughness:0.95, metalness:0.0 })
+    );
+    ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
+
+    // Road ring
+    const road = new THREE.Mesh(
+      new THREE.RingGeometry(36, 40, 128, 1),
+      new THREE.MeshStandardMaterial({ color:0x0f1218, roughness:() => 0.6, metalness:0.0 })
+    );
+    road.rotation.x = -Math.PI/2; scene.add(road);
+
+    // Pavement
+    const footpath = new THREE.Mesh(
+      new THREE.RingGeometry(34, 36, 128, 1),
+      new THREE.MeshStandardMaterial({ color:0x252b39, roughness:0.95, metalness:0.0 })
+    );
+    footpath.rotation.x = -Math.PI/2; scene.add(footpath);
+
+    // Drains as simple decals
+    const drainGeom = new THREE.BoxGeometry(0.6, 0.05, 0.2);
+    for(let i=0;i<16;i++){
+      const m = new THREE.MeshStandardMaterial({ color:0x22272f, roughness:0.8 });
+      const d = new THREE.Mesh(drainGeom,m);
+      const a = i/16*Math.PI*2; const r = 35.1;
+      d.position.set(Math.cos(a)*r, 0.03, Math.sin(a)*r);
+      d.rotation.y = a; scene.add(d);
+    }
+
+    // ---------------------- Materials ----------------------
+    const mats = {
+      granite: new THREE.MeshStandardMaterial({ color:0xb28c8a, roughness:0.8, metalness:0.05 }),
+      render: new THREE.MeshStandardMaterial({ color:0xe9e7df, roughness:0.9, metalness:0.0 }),
+      slate: new THREE.MeshStandardMaterial({ color:0x404651, roughness:0.6, metalness:0.1 }),
+      timber: new THREE.MeshStandardMaterial({ color:0x6a4a2f, roughness:0.7, metalness:0.05 }),
+      fibreglass: new THREE.MeshStandardMaterial({ color:0xaec7cf, roughness:0.25, metalness:0.0 })
+    };
+
+    function materialFromChoice(choice, age){
+      const copy = mats[choice].clone();
+      // Age: darken render, stain granite/slate, add roughness
+      const c = new THREE.Color(copy.color);
+      const k = 1 - age*0.25;
+      c.multiplyScalar(k); copy.color = c;
+      copy.roughness = THREE.MathUtils.clamp((copy.roughness||0.6) + age*0.25, 0, 1);
+      return copy;
+    }
+
+    // ---------------------- Building synthesis ----------------------
+    function makeBuilding(rng, preset, params){
+      // Massing: stack 1–3 volumes with offsets
+      const group = new THREE.Group(); group.userData.kind = preset;
+      const baseW = rng.range(8, 16);
+      const baseD = rng.range(10, 20);
+      const floors = Math.floor(rng.range(2, 5));
+      const storey = 3.2;
+      const baseH = floors*storey;
+      const base = new THREE.BoxGeometry(baseW, baseH, baseD);
+      const shellMat = materialFromChoice(materialFamilyForPreset(preset, params.material), params.age);
+      const shell = new THREE.Mesh(base, shellMat); shell.castShadow = shell.receiveShadow = true; group.add(shell);
+
+      // Optional upper volume
+      if (rng.rand()<0.7){
+        const w = baseW*rng.range(0.5, 0.85), d = baseD*rng.range(0.5, 0.9), h = storey*rng.range(1,2);
+        const dx = rng.range(-0.5,0.5)*(baseW-w)*0.6; const dz = rng.range(-0.5,0.5)*(baseD-d)*0.6;
+        const g = new THREE.BoxGeometry(w,h,d);
+        const m = materialFromChoice(materialFamilyForPreset(preset, params.material), params.age);
+        const u = new THREE.Mesh(g,m); u.position.set(dx, baseH/2 + h/2, dz); u.castShadow = u.receiveShadow = true; group.add(u);
+      }
+
+      // Roof: pitched or mix
+      const roofPitch = THREE.MathUtils.degToRad(params.roofPitch);
+      const roofType = (preset==='civic' || rng.rand()<0.3) ? 'mixed' : 'pitched';
+      const roof = buildRoofFor(group, roofType, roofPitch, params, rng);
+      if(roof) group.add(roof);
+
+      // Facades: window instancing on each visible face
+      const winDensity = params.winDensity;
+      const windowInst = buildWindowsFor(group, winDensity, rng);
+      group.add(windowInst);
+
+      // Door as a simple inset arch panel on ground storey
+      const door = buildDoorFor(group, rng, params);
+      if(door) group.add(door);
+
+      // Optional signage and uplighters
+      if (rng.rand()<0.5){
+        const sign = buildSignage(group, rng);
+        group.add(sign);
+      }
+
+      // Birds, small decorative
+      if (rng.rand()<0.25){
+        const birds = buildBirds(group, rng);
+        group.add(birds);
+      }
+
+      return group;
+    }
+
+    function materialFamilyForPreset(preset, choice){
+      // Keep Anglo-Norman tone: default granite; civic may be render+stone; storehouse slate/stone
+      if (choice!=='granite') return choice;
+      if (preset==='civic') return 'render';
+      if (preset==='store') return 'slate';
+      return 'granite';
+    }
+
+    function buildRoofFor(group, type, pitch, params, rng){
+      // Find the largest box as base
+      let base = null, maxVol = -1;
+      group.traverse(o=>{
+        if (o.isMesh && o.geometry.boundingBox === null) o.geometry.computeBoundingBox();
+        if (o.isMesh){
+          const bb = o.geometry.boundingBox; const size = new THREE.Vector3(); bb.getSize(size);
+          const vol = size.x*size.y*size.z;
+          if (vol>maxVol){ maxVol=vol; base=o; }
+        }
+      });
+      if(!base) return null;
+      const bb = base.geometry.boundingBox; const s = new THREE.Vector3(); bb.getSize(s);
+      const roof = new THREE.Group();
+      if (type==='pitched' || type==='mixed'){
+        const ridgeH = Math.tan(pitch)*(s.x*0.5);
+        const g = new THREE.ConeGeometry(s.x*0.5, ridgeH*2, 4, 1, true);
+        const m = mats.slate.clone(); m.roughness = 0.8 - 0.3*(1-params.age);
+        const c = new THREE.Mesh(g,m);
+        c.rotation.z = Math.PI/2; c.scale.set(1,1, s.z/(s.x*0.5));
+        c.position.y = s.y/2 + ridgeH*0.5; roof.add(c);
+
+        // Dormer stubs
+        const dormers = Math.floor(THREE.MathUtils.mapLinear(params.winDensity,0.1,0.95, 1, 4));
+        for(let i=0;i<dormers;i++){
+          const dx = THREE.MathUtils.lerp(-s.x*0.3, s.x*0.3, i/(dormers-1||1));
+          const box = new THREE.Mesh(new THREE.BoxGeometry(1.2,1,1.2), mats.slate);
+          box.position.set(dx, s.y/2 + ridgeH*0.3, s.z*0.25*(rng.rand()<0.5?1:-1));
+          roof.add(box);
+        }
+      }
+      roof.position.copy(base.position);
+      return roof;
+    }
+
+    function buildWindowsFor(group, density, rng){
+      // Instance small quads as emissive windows; density controls spacing
+      const geo = new THREE.PlaneGeometry(0.9,1.3);
+      const mat = new THREE.MeshStandardMaterial({ color:0x9fb6c8, emissive:0x111315, emissiveIntensity:0.6, metalness:0.0, roughness:0.2, side:THREE.FrontSide });
+      const mesh = new THREE.InstancedMesh(geo, mat, 5000);
+      let idx = 0;
+
+      const tmp = new THREE.Object3D();
+      group.children.forEach(ch=>{
+        if (!ch.isMesh) return;
+        // For each face of the box, sprinkle windows on upper storeys
+        ch.geometry.computeBoundingBox();
+        const bb = ch.geometry.boundingBox; const size = new THREE.Vector3(); bb.getSize(size);
+        const floors = Math.max(1, Math.floor(size.y/3.2));
+        const baysX = Math.max(2, Math.floor(size.x/(2.2 - density*1.2)));
+        const baysZ = Math.max(2, Math.floor(size.z/(2.2 - density*1.2)));
+        // +X / -X faces
+        const faces = [
+          { n:new THREE.Vector3(1,0,0), u:'z', bays:baysZ, width:size.z, off:'x' },
+          { n:new THREE.Vector3(-1,0,0), u:'z', bays:baysZ, width:size.z, off:'x' },
+          { n:new THREE.Vector3(0,0,1), u:'x', bays:baysX, width:size.x, off:'z' },
+          { n:new THREE.Vector3(0,0,-1), u:'x', bays:baysX, width:size.x, off:'z' }
+        ];
+        faces.forEach(f=>{
+          for(let fl=1; fl<floors; fl++){
+            for(let b=0; b<f.bays; b++){
+              if (rng.rand() > density) continue;
+              const frac = (b+0.5)/f.bays;
+              const px = f.u==='x' ? (frac-0.5)*size.x : (f.n.x>0? size.x/2 : f.n.x<0? -size.x/2 : 0);
+              const pz = f.u==='z' ? (frac-0.5)*size.z : (f.n.z>0? size.z/2 : f.n.z<0? -size.z/2 : 0);
+              const py = -size.y/2 + fl*3.2 + 1.6;
+              const pos = new THREE.Vector3(px, py, pz).add(ch.position);
+              tmp.position.copy(pos);
+              // orient plane to face normal
+              tmp.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), f.n);
+              const s = 1 + rng.range(-0.08,0.1);
+              tmp.scale.set(s, s, 1);
+              tmp.updateMatrix();
+              if (idx<mesh.count) mesh.setMatrixAt(idx++, tmp.matrix);
+            }
+          }
+        });
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.count = Math.max(1, idx);
+      return mesh;
+    }
+
+    function buildDoorFor(group, rng, params){
+      // One door on the largest mass
+      let base=null, max=-1, bb=null, size=new THREE.Vector3();
+      group.traverse(o=>{
+        if(o.isMesh){
+          o.geometry.computeBoundingBox(); const s=new THREE.Vector3(); o.geometry.boundingBox.getSize(s);
+          const v=s.x*s.y*s.z; if(v>max){max=v;base=o;bb=o.geometry.boundingBox;size.copy(s)}
+        }
+      });
+      if(!base) return null;
+      const face = rng.rand()<0.5? 'z':'x';
+      const arch = new THREE.Shape();
+      const w = 1.2, h = 2.2;
+      // shallow round arch
+      arch.moveTo(-w/2,0); arch.lineTo(-w/2,h*0.7);
+      arch.quadraticCurveTo(0,h, w/2,h*0.7); arch.lineTo(w/2,0); arch.closePath();
+      const geo = new THREE.ExtrudeGeometry(arch,{ depth:0.2, bevelEnabled:false });
+      const m = materialFromChoice('granite', params.age);
+      const door = new THREE.Mesh(geo, m);
+      if(face==='z'){
+        const z = rng.rand()<0.5? size.z/2+0.01: -size.z/2-0.01;
+        door.position.set(0, -size.y/2+1.1, z);
+        door.rotation.y = z>0? 0 : Math.PI;
+      } else {
+        const x = rng.rand()<0.5? size.x/2+0.01: -size.x/2-0.01;
+        door.position.set(x, -size.y/2+1.1, 0);
+        door.rotation.y = x>0? -Math.PI/2 : Math.PI/2;
+      }
+      return door;
+    }
+
+    function buildSignage(group, rng){
+      const s = new THREE.Group();
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.3), mats.fibreglass);
+      p.position.set(0, 3.5, group.position.z>0? 1.01 : -1.01);
+      s.add(p);
+      s.userData.tick = (t)=>{ p.rotation.z = Math.sin(t*0.8)*0.05; };
+      return s;
+    }
+
+    function buildBirds(group, rng){
+      const g = new THREE.Group();
+      for(let i=0;i<5;i++){
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.06), new THREE.MeshStandardMaterial({ color:0xdddddd, roughness:0.9 }));
+        b.position.set(rng.range(-1,1), rng.range(2,4.5), rng.range(-1,1));
+        b.userData.phase = rng.range(0,Math.PI*2);
+        g.add(b);
+      }
+      g.userData.tick = (t)=> g.children.forEach((b,i)=>{ b.position.y += Math.sin(t*3 + i)*0.002; });
+      return g;
+    }
+
+    // ---------------------- District ----------------------
+    const districtGroup = new THREE.Group(); scene.add(districtGroup);
+    const carsGroup = new THREE.Group(); scene.add(carsGroup);
+    const rngFor = ()=> seeded(state.seed);
+
+    function generateDistrict(){
+      clearGroup(districtGroup); clearGroup(carsGroup);
+      const rng = rngFor();
+
+      // Parcels along a ring road with jittered depths
+      const parcels = [];
+      const N = 32; const R = 30; const depth = 10;
+      for(let i=0;i<N;i++){
+        const a0 = i/N*Math.PI*2, a1 = (i+1)/N*Math.PI*2;
+        const mid = (a0+a1)/2;
+        const out = R + rng.range(6, 14);
+        const px = Math.cos(mid)*out, pz = Math.sin(mid)*out;
+        const preset = pickPreset(state.params.preset, rng);
+        const b = makeBuilding(rng, preset, state.params);
+        b.position.set(px, state.params.age*0.2, pz);
+        b.rotation.y = mid + Math.PI; // face road
+        districtGroup.add(b);
+        parcels.push({ preset, pos:[px,pz] });
+      }
+
+      // Cars looping on the ring
+      const carCount = state.params.cars|0;
+      for(let i=0;i<carCount;i++){
+        const car = new THREE.Mesh(new THREE.BoxGeometry(1.6,0.7,3.2), new THREE.MeshStandardMaterial({ color:new THREE.Color().setHSL(i/carCount,0.5,0.5) }));
+        car.userData.t = rng.rand();
+        carsGroup.add(car);
+      }
+
+      // Lamps with flicker
+      const lampGeom = new THREE.CylinderGeometry(0.06,0.06,4,8);
+      for(let i=0;i<16;i++){
+        const a = i/16*Math.PI*2; const r = 33.5;
+        const pole = new THREE.Mesh(lampGeom, new THREE.MeshStandardMaterial({ color:0x9aa3ad, roughness:0.8 }));
+        pole.position.set(Math.cos(a)*r, 2, Math.sin(a)*r);
+        districtGroup.add(pole);
+        const bulb = new THREE.PointLight(0xffe9bb, 0.0, 12, 2);
+        bulb.position.set(pole.position.x, 4.1, pole.position.z);
+        bulb.userData.flicker = Math.random()*1000;
+        districtGroup.add(bulb);
+      }
+
+      state.district = { parcels };
+      log(`Generated ${parcels.length} buildings, ${carCount} cars. Seed ${state.seed}`);
+    }
+
+    function pickPreset(mode, rng){
+      if (mode!=='mix') return mode==='house'?'house':mode==='civic'?'civic':mode==='store'?'store':'terrace';
+      const r=rng.rand(); if(r<0.45) return 'terrace'; if(r<0.7) return 'house'; if(r<0.88) return 'store'; return 'civic';
+    }
+
+    function clearGroup(g){ while(g.children.length) g.remove(g.children[0]); }
+
+    // ---------------------- Weather & time ----------------------
+    const rainGroup = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size:0.08, color:0x9db4ff, transparent:true, opacity:0.8 }));
+    scene.add(rainGroup);
+    function regenRain(){
+      const count = Math.floor(2000*state.env.rain);
+      const pos = new Float32Array(Math.max(1,count)*3);
+      for(let i=0;i<count;i++){
+        pos[i*3+0] = (Math.random()-0.5)*160;
+        pos[i*3+1] = Math.random()*40+5;
+        pos[i*3+2] = (Math.random()-0.5)*160;
+      }
+      rainGroup.geometry.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      rainGroup.visible = count>0;
+    }
+
+    function updateSun(tod){
+      // Simple analytic sun; tod in hours [0,24)
+      const theta = (tod/24)*Math.PI*2;
+      const elev = Math.max(0.05, Math.sin(theta)*0.85);
+      const az = Math.cos(theta)*Math.PI;
+      const dir = new THREE.Vector3(Math.cos(az)*Math.cos(elev), Math.sin(elev), Math.sin(az)*Math.cos(elev));
+      sun.position.copy(dir.multiplyScalar(60));
+      const isNight = elev<0.15;
+      sun.intensity = isNight ? 0.05 : 1.2;
+      hemi.intensity = isNight ? 0.15 : 0.6;
+      // Streetlights
+      districtGroup.children.forEach(ch=>{
+        if (ch.isPointLight) ch.intensity = isNight ? 1.2 + Math.sin((performance.now()+ch.userData.flicker)*0.004)*0.2 : 0.0;
+      });
+      // Wet road gloss
+      const wet = state.env.rain*0.8;
+      road.material.roughness = THREE.MathUtils.clamp(0.7 - wet*0.5, 0.05, 1);
+      road.material.needsUpdate = true;
+    }
+
+    // ---------------------- Cars loop ----------------------
+    function carPosAt(t){
+      const R = 38; const a = t*Math.PI*2; return new THREE.Vector3(Math.cos(a)*R, 0.15, Math.sin(a)*R);
+    }
+
+    // ---------------------- Save/Load ----------------------
+    function serialize(){
+      return JSON.stringify({
+        version: state.version,
+        seed: state.seed,
+        env: state.env,
+        params: state.params,
+        district: state.district
+      }, null, 2);
+    }
+    function restore(json){
+      try{
+        const obj = JSON.parse(json);
+        state.seed = obj.seed ?? state.seed;
+        state.env = obj.env ?? state.env;
+        state.params = Object.assign(state.params, obj.params||{});
+        // Controls reflect state
+        preset.value = state.params.preset;
+        winDensity.value = state.params.winDensity;
+        roofPitch.value = state.params.roofPitch;
+        material.value = state.params.material;
+        age.value = state.params.age;
+        tod.value = state.env.timeOfDay;
+        rain.value = state.env.rain;
+        cars.value = state.params.cars;
+        generateDistrict(); regenRain(); updateSun(state.env.timeOfDay);
+        log('Restored scene.');
+      }catch(e){ log('Restore failed: '+e.message) }
+    }
+
+    // ---------------------- UI wiring ----------------------
+    const preset = document.getElementById('preset');
+    const winDensity = document.getElementById('winDensity');
+    const roofPitch = document.getElementById('roofPitch');
+    const material = document.getElementById('material');
+    const age = document.getElementById('age');
+    const tod = document.getElementById('tod');
+    const rain = document.getElementById('rain');
+    const cars = document.getElementById('cars');
+
+    preset.onchange = ()=>{ state.params.preset = preset.value; generateDistrict(); };
+    winDensity.oninput = ()=>{ state.params.winDensity = +winDensity.value; generateDistrict(); };
+    roofPitch.oninput = ()=>{ state.params.roofPitch = +roofPitch.value; generateDistrict(); };
+    material.onchange = ()=>{ state.params.material = material.value; generateDistrict(); };
+    age.oninput = ()=>{ state.params.age = +age.value; generateDistrict(); };
+    tod.oninput = ()=>{ state.env.timeOfDay = +tod.value; updateSun(state.env.timeOfDay); };
+    rain.oninput = ()=>{ state.env.rain = +rain.value; regenRain(); };
+    cars.oninput = ()=>{ state.params.cars = +cars.value; generateDistrict(); };
+
+    document.getElementById('btnGenerate').onclick = generateDistrict;
+    document.getElementById('btnReseed').onclick = ()=>{ state.seed = Math.floor(Math.random()*1e9)>>>0; generateDistrict(); };
+    document.getElementById('btnSave').onclick = ()=>{
+      const blob = new Blob([serialize()], {type:'application/json'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `neo-anglo-norman-${state.seed}.json`; a.click();
+    };
+
+    // Drag-drop restore
+    window.addEventListener('dragover', e=>{ e.preventDefault(); });
+    window.addEventListener('drop', e=>{
+      e.preventDefault();
+      if(!e.dataTransfer.files.length) return;
+      const f = e.dataTransfer.files[0];
+      const r = new FileReader();
+      r.onload = ()=> restore(r.result);
+      r.readAsText(f);
+    });
+
+    // ---------------------- Log ----------------------
+    const logEl = document.getElementById('log');
+    function log(s){ logEl.textContent = s; }
+
+    // ---------------------- Animate ----------------------
+    const clock = new THREE.Clock();
+    function animate(){
+      requestAnimationFrame(animate);
+      const dt = Math.min(0.033, clock.getDelta());
+      const t = performance.now()*0.001;
+
+      // Cars
+      for(const car of carsGroup.children){
+        car.userData.t = (car.userData.t + dt*0.03*(0.6+Math.sin(t+car.id)*0.4))%1;
+        const p = carPosAt(car.userData.t);
+        const p2 = carPosAt((car.userData.t+0.01)%1);
+        car.position.copy(p);
+        car.lookAt(p2.x, p2.y, p2.z);
+      }
+
+      // Rain fall
+      if (rainGroup.visible){
+        const pos = rainGroup.geometry.attributes.position;
+        for(let i=0;i<pos.count;i++){
+          let y = pos.getY(i) - (3 + state.env.rain*12)*dt;
+          if (y<0) y = 40 + Math.random()*10;
+          pos.setY(i, y);
+        }
+        pos.needsUpdate = true;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    // ---------------------- Boot ----------------------
+    generateDistrict(); regenRain(); updateSun(state.env.timeOfDay); animate();
+
+    // Resize
+    addEventListener('resize', ()=>{
+      camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
