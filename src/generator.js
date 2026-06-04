@@ -108,7 +108,7 @@ function makePalette(material, age, preset, rng){
 }
 
 function chooseDims(rng, preset){
-  let w, d, floors;
+  let w, d, floors, storey = 3.1;
   switch (preset){
     case 'terrace':
       w = rng.range(4.4, 5.6); d = rng.range(7.0, 10.5); floors = 2 + (rng.rand() < 0.35 ? 1 : 0); break;
@@ -118,10 +118,15 @@ function chooseDims(rng, preset){
       w = rng.range(13, 20); d = rng.range(10, 14); floors = 2 + (rng.rand() < 0.7 ? 1 : 0); break;
     case 'store':
       w = rng.range(8.5, 13.5); d = rng.range(14, 22); floors = 2; break;
+    case 'bow':
+      w = rng.range(5.0, 6.6); d = rng.range(9, 12); floors = 3; storey = 2.85; break;
+    case 'granite-glass':
+      w = rng.range(13, 18); d = rng.range(11, 15); floors = 3; storey = 3.45; break;
+    case 'future':
+      w = rng.range(9, 12); d = rng.range(10, 13); floors = 2; storey = 3.30; break;
     default:
       w = rng.range(6, 10); d = rng.range(8, 13); floors = 2;
   }
-  const storey = 3.1;
   return { w, d, floors, storey, h: floors*storey };
 }
 
@@ -447,6 +452,15 @@ function addCornice(g, {w, d, h}, palette){
 }
 
 function makeBuilding(rng, preset, params){
+  switch (preset){
+    case 'bow':           return makeBowfront(rng, params);
+    case 'granite-glass': return makeGraniteGlass(rng, params);
+    case 'future':        return makeFutureHouse(rng, params);
+    default:              return makeStandardBuilding(rng, preset, params);
+  }
+}
+
+function makeStandardBuilding(rng, preset, params){
   const dims = chooseDims(rng, preset);
   const palette = makePalette(params.material, params.age, preset, rng);
 
@@ -471,13 +485,446 @@ function makeBuilding(rng, preset, params){
   return g;
 }
 
+// =============================================================================
+// Mutation registers — three new presets that carry the Jersey language forward
+// =============================================================================
+
+// 1. Bow-front Georgian — St Aubin's seafront. Painted render, narrow plot, a
+//    shallow semicircular bow extending the full front facade.
+const RENDER_BOW_COLOURS = [0xefe8d4, 0xeac9b0, 0xd6c08e, 0xc8dde0, 0xead2c2, 0xe8c8c8, 0xd5e3d2, 0xdfdcd0];
+
+function makeBowfront(rng, params){
+  const dims = chooseDims(rng, 'bow');
+  const { w, d, h, floors, storey } = dims;
+
+  // Painted render dominates this register regardless of user material;
+  // the picked colour decides the building's personality.
+  const palette = makePalette('render', params.age, 'bow', rng);
+  palette.wall.color.set(rng.pick(RENDER_BOW_COLOURS));
+  palette.chimney = palette.wall;
+
+  const g = new THREE.Group();
+  g.userData.preset = 'bow';
+  g.userData.dims = dims;
+
+  addPlinth(g, dims, palette);
+  addShell(g, dims, palette);
+
+  // Bow geometry — shallow arc of a large circle, full facade width
+  const sagitta = rng.range(0.55, 0.85);
+  const chord = w * 0.94;
+  const R = (chord*chord/4 + sagitta*sagitta) / (2*sagitta);
+  const thetaMax = Math.asin(chord / (2*R));
+  // Cylinder centre placed so chord lies at the facade plane (z = -d/2)
+  const centreZ = -d/2 + (R - sagitta);
+  const bowGeo = new THREE.CylinderGeometry(
+    R, R, h, 40, 1, true,
+    3*Math.PI/2 - thetaMax, 2*thetaMax
+  );
+  const bow = new THREE.Mesh(bowGeo, palette.wall);
+  bow.position.set(0, h/2 + 0.45, centreZ);
+  bow.castShadow = bow.receiveShadow = true;
+  g.add(bow);
+
+  // String course above ground floor (typical Georgian)
+  const band = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.04, 0.12, d + 0.04),
+    palette.surround
+  );
+  band.position.y = 0.45 + storey - 0.06;
+  g.add(band);
+
+  // Cornice at the eaves
+  const cornice = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.20, 0.18, d + 0.20),
+    palette.surround
+  );
+  cornice.position.y = h + 0.45 - 0.09;
+  cornice.castShadow = cornice.receiveShadow = true;
+  g.add(cornice);
+
+  addRoof(g, dims, params.roofPitch, palette);
+  addChimneys(g, dims, palette, rng, 'bow');
+
+  // Door at bow centre (flat, sitting on the chord line for simplicity)
+  addDoor(g, dims, palette, 'house');
+
+  // Windows on the curved bow — three vertical bays
+  const bowBays = 3;
+  for (let s = 0; s < floors; s++){
+    for (let b = 0; b < bowBays; b++){
+      const t = (b + 0.5) / bowBays;
+      const theta = (3*Math.PI/2 - thetaMax) + t * (2*thetaMax);
+      const wx = Math.cos(theta) * R;
+      const wz = Math.sin(theta) * R + centreZ;
+      const wy = 0.45 + s*storey + storey*0.52;
+      // Skip ground-floor centre column (door is there)
+      if (s === 0 && b === Math.floor(bowBays/2)) continue;
+
+      const dir = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta)).normalize();
+      addCurvedWindow(g, dir, wx, wy, wz, palette);
+    }
+  }
+
+  // Side & back windows (rectangular, normal-style)
+  addOpeningsSidesOnly(g, dims, palette, params, rng);
+
+  return g;
+}
+
+function addCurvedWindow(g, dir, px, py, pz, palette){
+  // Sash window proportions — narrower, taller than standard
+  const ww = 0.82, wh = 1.55;
+  const pos = new THREE.Vector3(px, py, pz);
+  const yaw = Math.atan2(dir.x, dir.z);
+
+  // Painted surround — flat, on the curved surface
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(ww + 0.18, wh + 0.18, 0.04),
+    palette.surround
+  );
+  frame.position.copy(pos).add(dir.clone().multiplyScalar(0.025));
+  frame.rotation.y = yaw;
+  frame.castShadow = frame.receiveShadow = true;
+  g.add(frame);
+
+  const pane = new THREE.Mesh(new THREE.PlaneGeometry(ww, wh), sharedGlass);
+  pane.position.copy(pos).add(dir.clone().multiplyScalar(0.06));
+  pane.rotation.y = yaw;
+  g.add(pane);
+
+  // Sash horizontal divider
+  const mullion = new THREE.Mesh(
+    new THREE.BoxGeometry(ww, 0.04, 0.04),
+    palette.surround
+  );
+  mullion.position.copy(pos).add(dir.clone().multiplyScalar(0.07));
+  mullion.rotation.y = yaw;
+  g.add(mullion);
+
+  // Painted sill
+  const sill = new THREE.Mesh(
+    new THREE.BoxGeometry(ww + 0.35, 0.08, 0.18),
+    palette.surround
+  );
+  sill.position.copy(pos).add(dir.clone().multiplyScalar(0.09));
+  sill.position.y -= wh/2 + 0.06;
+  sill.rotation.y = yaw;
+  g.add(sill);
+}
+
+// Helper for bow-front and other variants — windows on the side and back only
+function addOpeningsSidesOnly(g, dims, palette, params, rng){
+  const { w, d, h, floors, storey } = dims;
+  const faces = [
+    { dir: new THREE.Vector3(0, 0,  1), axis: 'x', size: w, perp: d, importance: 0.45 }, // back
+    { dir: new THREE.Vector3( 1, 0, 0), axis: 'z', size: d, perp: w, importance: 0.55 }, // right
+    { dir: new THREE.Vector3(-1, 0, 0), axis: 'z', size: d, perp: w, importance: 0.55 }, // left
+  ];
+  const shutterMode = params.shutters || 'some';
+  const allowShutters = shutterMode !== 'none';
+  faces.forEach(face => {
+    const positions = computeBayPositions(face.size, false, allowShutters, 'house');
+    for (const u of positions){
+      const colDensity = params.winDensity * face.importance + 0.10;
+      if (rng.rand() > colDensity) continue;
+      const colShutters = shutterMode === 'all' ? true :
+                          (shutterMode === 'some' ? (rng.rand() < 0.55) : false);
+      for (let s = 0; s < floors; s++){
+        const y = 0.45 + s*storey + storey*0.52;
+        addWindow(g, face.dir, face.axis, face.perp, u, y, params.material === 'fibreglass' ? 'render' : params.material, palette, colShutters);
+      }
+    }
+  });
+}
+
+// 2. Granite-glass — the new Government of Jersey HQ register.
+//    Granite ground floor, glass curtain wall above with vertical granite fins,
+//    very shallow roof or near-flat, no chimneys, granite top band.
+function makeGraniteGlass(rng, params){
+  const dims = chooseDims(rng, 'granite-glass');
+  const { w, d, h, floors, storey } = dims;
+  // Granite drives the wall palette regardless of user material picker.
+  const palette = makePalette('granite', params.age, 'granite-glass', rng);
+
+  const g = new THREE.Group();
+  g.userData.preset = 'granite-glass';
+  g.userData.dims = dims;
+
+  addPlinth(g, dims, palette);
+
+  // Granite ground floor mass
+  const base = new THREE.Mesh(new THREE.BoxGeometry(w, storey, d), palette.wall);
+  base.position.y = storey/2 + 0.45;
+  base.castShadow = base.receiveShadow = true;
+  g.add(base);
+
+  // Glass upper mass — slightly inset
+  const upperH = h - storey;
+  const upperW = w * 0.96, upperD = d * 0.96;
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x6a8a99, roughness: 0.12, metalness: 0.62
+  });
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(upperW, upperH, upperD), glassMat);
+  upper.position.y = storey + upperH/2 + 0.45;
+  upper.castShadow = upper.receiveShadow = true;
+  g.add(upper);
+
+  // Vertical granite fins on all four facades (visual rhythm)
+  const finMat = palette.wall;
+  const placeFin = (x, z) => {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.25, upperH, 0.35), finMat);
+    fin.position.set(x, storey + upperH/2 + 0.45, z);
+    fin.castShadow = fin.receiveShadow = true;
+    g.add(fin);
+  };
+  const finCountFront = Math.max(5, Math.floor(w / 2.0));
+  for (let i = 0; i <= finCountFront; i++){
+    const x = -w/2 + (i / finCountFront) * w;
+    placeFin(x, -d/2 - 0.10);
+    placeFin(x, +d/2 + 0.10);
+  }
+  const finCountSide = Math.max(4, Math.floor(d / 2.3));
+  for (let i = 0; i <= finCountSide; i++){
+    const z = -d/2 + (i / finCountSide) * d;
+    placeFin(-w/2 - 0.10, z);
+    placeFin(+w/2 + 0.10, z);
+  }
+
+  // Granite slab between ground and upper — a horizontal expression of the join
+  const joinBand = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.10, 0.25, d + 0.10),
+    palette.surround
+  );
+  joinBand.position.y = storey + 0.45 + 0.025;
+  joinBand.castShadow = joinBand.receiveShadow = true;
+  g.add(joinBand);
+
+  // Top cornice — granite cap reading as the eaves
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.30, 0.40, d + 0.30),
+    palette.surround
+  );
+  top.position.y = h + 0.45 - 0.20;
+  top.castShadow = top.receiveShadow = true;
+  g.add(top);
+
+  // Very shallow pitch roof — almost reads as flat
+  const flatPitch = 8;
+  addRoof(g, { ...dims, h: h - 0.05 }, flatPitch, palette);
+
+  // Ground-floor entrance — a wide civic-style door
+  addDoor(g, dims, palette, 'civic');
+
+  // Ground-floor windows in granite surrounds (the upper is already all glass)
+  const hasQuoins = false; // smooth granite — no quoins on contemporary
+  const groundPositions = computeBayPositions(w, hasQuoins, false, 'civic');
+  const doorHalfW = 0.7 + 0.25;
+  for (const u of groundPositions){
+    if (Math.abs(u) < doorHalfW) continue;
+    const y = 0.45 + storey * 0.52;
+    addWindow(g, new THREE.Vector3(0, 0, -1), 'x', d, u, y, 'granite', palette, false);
+  }
+  // Sides — fewer ground openings
+  for (const u of computeBayPositions(d, false, false, 'civic').slice(0, 2)){
+    const y = 0.45 + storey * 0.52;
+    addWindow(g, new THREE.Vector3( 1, 0, 0), 'z', w, u, y, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3(-1, 0, 0), 'z', w, u, y, 'granite', palette, false);
+  }
+
+  return g;
+}
+
+// 3. Future house — Jersey vernacular grown forward. Granite base + lighter
+//    upper (timber or render), larger window openings, deeper reveals, gabled
+//    roof and chimney preserved. The veneration-of-the-flame register.
+function makeFutureHouse(rng, params){
+  const dims = chooseDims(rng, 'future');
+  const { w, d, h, floors, storey } = dims;
+
+  const granitePalette = makePalette('granite', params.age, 'future', rng);
+  const upperFamily = rng.rand() < 0.55 ? 'timber' : 'render';
+  const upperPalette = makePalette(upperFamily, params.age, 'future', rng);
+  // Use granite-style surrounds even on upper level for material continuity
+  upperPalette.surround = granitePalette.surround;
+
+  const g = new THREE.Group();
+  g.userData.preset = 'future';
+  g.userData.dims = dims;
+
+  addPlinth(g, dims, granitePalette);
+
+  // Granite base — usually ground floor (~storey high). Sometimes 1.5 storeys.
+  const baseH = storey * (rng.rand() < 0.3 ? 1.35 : 1.0);
+  const base = new THREE.Mesh(new THREE.BoxGeometry(w, baseH, d), granitePalette.wall);
+  base.position.y = baseH/2 + 0.45;
+  base.castShadow = base.receiveShadow = true;
+  g.add(base);
+
+  // Light upper mass
+  const upperH = h - baseH;
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(w, upperH, d), upperPalette.wall);
+  upper.position.y = baseH + upperH/2 + 0.45;
+  upper.castShadow = upper.receiveShadow = true;
+  g.add(upper);
+
+  // Stone band marking the material join
+  const joinBand = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.10, 0.18, d + 0.10),
+    granitePalette.surround
+  );
+  joinBand.position.y = baseH + 0.45 + 0.01;
+  joinBand.castShadow = true;
+  g.add(joinBand);
+
+  addRoof(g, dims, params.roofPitch, granitePalette);
+  addChimneys(g, dims, granitePalette, rng, 'future');
+
+  // Door at base centre — full-height door for contemporary feel
+  addDoor(g, dims, granitePalette, 'civic');
+
+  // Big openings — ground floor uses granite surrounds, upper uses BIG inset windows
+  const shutterMode = params.shutters || 'some';
+  const allowShutters = shutterMode !== 'none';
+
+  // Ground floor windows: standard size, granite surrounds
+  const groundPositions = computeBayPositions(w, false, false, 'house');
+  const doorHalfW = 0.7 + 0.30;
+  for (const u of groundPositions){
+    if (Math.abs(u) < doorHalfW) continue;
+    addWindow(g, new THREE.Vector3(0, 0, -1), 'x', d, u, 0.45 + baseH*0.5, 'granite', granitePalette, false);
+  }
+  for (const u of computeBayPositions(d, false, false, 'house')){
+    addWindow(g, new THREE.Vector3( 1, 0, 0), 'z', w, u, 0.45 + baseH*0.5, 'granite', granitePalette, false);
+    addWindow(g, new THREE.Vector3(-1, 0, 0), 'z', w, u, 0.45 + baseH*0.5, 'granite', granitePalette, false);
+  }
+  // Back of ground floor
+  for (const u of groundPositions){
+    if (rng.rand() < 0.5) continue;
+    addWindow(g, new THREE.Vector3(0, 0,  1), 'x', d, u, 0.45 + baseH*0.5, 'granite', granitePalette, false);
+  }
+
+  // Upper floor BIG inset windows
+  addBigUpperWindows(g, dims, baseH, upperFamily, granitePalette, upperPalette, params, rng);
+
+  return g;
+}
+
+function addBigUpperWindows(g, dims, baseH, upperFamily, granitePalette, upperPalette, params, rng){
+  const { w, d, floors, storey } = dims;
+  const upperFloors = floors - 1;
+  if (upperFloors <= 0) return;
+
+  const winW = 1.85, winH = 2.10;
+  const frameDepth = 0.22;     // chunky granite frame
+  const protrude = frameDepth/2 + 0.01;  // how far frame centre sits in front of wall
+
+  const placeBig = (faceDir, axis, perpSize, u, y) => {
+    const pos = new THREE.Vector3();
+    if (axis === 'x'){ pos.set(u, y, faceDir.z * perpSize/2); }
+    else              { pos.set(faceDir.x * perpSize/2, y, u); }
+    const yaw = Math.atan2(faceDir.x, faceDir.z);
+    const out = faceDir.clone();   // outward-pointing unit vector
+
+    // Top lintel — thick granite slab protruding from the wall, sitting above the opening
+    const top = new THREE.Mesh(
+      new THREE.BoxGeometry(winW + 0.40, 0.22, frameDepth),
+      granitePalette.surround
+    );
+    top.position.copy(pos).add(out.clone().multiplyScalar(protrude));
+    top.position.y += winH/2 + 0.11;
+    top.rotation.y = yaw;
+    top.castShadow = top.receiveShadow = true;
+    g.add(top);
+
+    // Bottom sill — deeper, juts out a touch more like a window seat
+    const sillDepth = frameDepth + 0.14;
+    const sill = new THREE.Mesh(
+      new THREE.BoxGeometry(winW + 0.55, 0.20, sillDepth),
+      granitePalette.surround
+    );
+    sill.position.copy(pos).add(out.clone().multiplyScalar(sillDepth/2 + 0.01));
+    sill.position.y -= winH/2 + 0.10;
+    sill.rotation.y = yaw;
+    sill.castShadow = sill.receiveShadow = true;
+    g.add(sill);
+
+    // Side jambs — vertical granite slabs framing the opening
+    for (const side of [-1, +1]){
+      const jamb = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, winH + 0.22, frameDepth),
+        granitePalette.surround
+      );
+      const off = new THREE.Vector3();
+      if (axis === 'x'){ off.set(side * (winW/2 + 0.09), 0, 0); }
+      else              { off.set(0, 0, side * (winW/2 + 0.09)); }
+      jamb.position.copy(pos).add(off).add(out.clone().multiplyScalar(protrude));
+      jamb.rotation.y = yaw;
+      jamb.castShadow = jamb.receiveShadow = true;
+      g.add(jamb);
+    }
+
+    // Glass — just outside the wall so it isn't occluded; the protruding frame
+    // creates the "deep reveal" silhouette by being much further forward.
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), sharedGlass);
+    pane.position.copy(pos).add(out.clone().multiplyScalar(0.012));
+    pane.rotation.y = yaw;
+    g.add(pane);
+
+    // Vertical mullion across the glass — divides large pane
+    const mullion = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, winH, 0.05),
+      granitePalette.surround
+    );
+    mullion.position.copy(pos).add(out.clone().multiplyScalar(0.04));
+    mullion.rotation.y = yaw;
+    g.add(mullion);
+  };
+
+  // Front face
+  const target = 2.6;
+  const usable = w - 1.6;
+  const n = Math.max(1, Math.round(usable / target));
+  const sp = usable / n;
+  for (let b = 0; b < n; b++){
+    const u = -w/2 + 0.8 + (b + 0.5) * sp;
+    for (let s = 0; s < upperFloors; s++){
+      const y = 0.45 + baseH + s*storey + storey*0.5;
+      placeBig(new THREE.Vector3(0, 0, -1), 'x', d, u, y);
+    }
+  }
+  // Sides — fewer, only 1-2
+  const sideN = Math.max(1, Math.round((d - 1.6) / 3.0));
+  const sideSp = (d - 1.6) / sideN;
+  for (let b = 0; b < sideN; b++){
+    const u = -d/2 + 0.8 + (b + 0.5) * sideSp;
+    for (let s = 0; s < upperFloors; s++){
+      const y = 0.45 + baseH + s*storey + storey*0.5;
+      placeBig(new THREE.Vector3( 1, 0, 0), 'z', w, u, y);
+      placeBig(new THREE.Vector3(-1, 0, 0), 'z', w, u, y);
+    }
+  }
+  // Back — sparse
+  for (let b = 0; b < n; b++){
+    if (rng.rand() < 0.4) continue;
+    const u = -w/2 + 0.8 + (b + 0.5) * sp;
+    for (let s = 0; s < upperFloors; s++){
+      const y = 0.45 + baseH + s*storey + storey*0.5;
+      placeBig(new THREE.Vector3(0, 0,  1), 'x', d, u, y);
+    }
+  }
+}
+
 function pickPreset(mode, rng){
   if (mode !== 'mix') return mode;
   const r = rng.rand();
-  if (r < 0.40) return 'terrace';
-  if (r < 0.65) return 'house';
-  if (r < 0.85) return 'store';
-  return 'civic';
+  if (r < 0.28) return 'terrace';
+  if (r < 0.45) return 'house';
+  if (r < 0.60) return 'store';
+  if (r < 0.70) return 'civic';
+  if (r < 0.82) return 'bow';
+  if (r < 0.92) return 'granite-glass';
+  return 'future';
 }
 
 function addStreetlights(lampGroup, rng){
