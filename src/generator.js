@@ -4,10 +4,10 @@
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
 
 export const state = {
-  version: '0.4.0',
+  version: '0.5.0',
   seed: (Math.random()*1e9) >>> 0,
   env:    { timeOfDay: 13.5, rain: 0.1 },
-  params: { preset: 'mix', winDensity: 0.7, roofPitch: 42, material: 'granite', age: 0.3, cars: 8 }
+  params: { preset: 'mix', winDensity: 0.7, roofPitch: 42, material: 'granite', age: 0.3, cars: 8, shutters: 'some' }
 };
 
 // Shared materials whose properties are updated from main.js per environment
@@ -93,10 +93,18 @@ function makePalette(material, age, preset, rng){
 
   const chimneyCap = new THREE.MeshStandardMaterial({ color: 0x7a818c, roughness: 0.75 });
 
-  const doorPalette = [0x113022, 0x2a1610, 0x5b0e0e, 0x123e6a, 0x252a30];
-  const door = new THREE.MeshStandardMaterial({ color: rng.pick(doorPalette), roughness: 0.45, metalness: 0.05 });
+  // Doors and shutters — painted timber palette pulled from real Channel Island streetscapes:
+  // deep teal-green, navy, oxblood, charcoal, terracotta, a paler buttery cream for renders.
+  const paintPalette = [0x113022, 0x162f4a, 0x5b1812, 0x2a1610, 0x252a30, 0xa84c2a, 0x195244, 0xd6c08e];
+  const door = new THREE.MeshStandardMaterial({
+    color: rng.pick(paintPalette), roughness: 0.45, metalness: 0.05
+  });
+  // Shutter colour: different draw from same palette, slightly more saturated
+  const shutter = new THREE.MeshStandardMaterial({
+    color: rng.pick(paintPalette), roughness: 0.55, metalness: 0.0
+  });
 
-  return { wall, surround, quoin: surround, plinth, roof, roofRidge, chimney: wall, chimneyCap, door };
+  return { wall, surround, quoin: surround, plinth, roof, roofRidge, chimney: wall, chimneyCap, door, shutter };
 }
 
 function chooseDims(rng, preset){
@@ -249,10 +257,69 @@ function addChimneys(g, dims, palette, rng, preset){
   }
 }
 
-function addOpening(g, faceDir, axis, perpSize, u, y, isDoor, palette, material, preset){
-  const ow = isDoor ? (preset === 'store' ? 2.4 : (preset === 'civic' ? 1.4 : 1.05)) : 0.95;
-  const oh = isDoor ? (preset === 'store' ? 2.6 : (preset === 'civic' ? 2.4  : 2.05)) : 1.35;
+const WINDOW_W = 0.95;
+const WINDOW_H = 1.35;
+const SURROUND_THICK = 0.13;
+const SHUTTER_W = 0.45;
 
+// Compute clear-of-edge bay centres along one wall face. Keeps windows clear of
+// corner quoins, leaves room for shutters if the building is using them, and
+// avoids cramming two windows so close their surrounds touch.
+function computeBayPositions(faceSize, hasQuoins, allowShutters, preset){
+  const quoinMargin = hasQuoins ? 0.85 : 0.12;
+  const halfOp = WINDOW_W/2 + SURROUND_THICK + (allowShutters ? SHUTTER_W : 0);
+  const edgeMargin = quoinMargin + halfOp + 0.10;
+  const usable = faceSize - 2 * edgeMargin;
+  if (usable < 0) return [];
+  const target = preset === 'civic' ? 2.85 : (preset === 'store' ? 3.30 : 2.45);
+  const minSpacing = 2 * halfOp + 0.30;
+  let n = Math.max(1, Math.round(usable / target + 0.3));
+  while (n > 1 && usable / n < minSpacing) n--;
+  if (n < 1) return [];
+  const s = n > 0 ? usable / n : 0;
+  const out = [];
+  for (let b = 0; b < n; b++){
+    out.push(-faceSize/2 + edgeMargin + (b + 0.5) * s);
+  }
+  return out;
+}
+
+function addDoor(g, dims, palette, preset){
+  const {d} = dims;
+  const isStore = preset === 'store';
+  const isCivic = preset === 'civic';
+  const dw = isStore ? 2.4 : (isCivic ? 1.4 : 1.05);
+  const dh = isStore ? 2.6 : (isCivic ? 2.4 : 2.05);
+
+  const faceDir = new THREE.Vector3(0, 0, -1);
+  const facePos = new THREE.Vector3(0, 0.45 + 0.05 + dh/2, -d/2);
+
+  // Surround (always present on doors — even for slate/timber/fibreglass)
+  const thick = 0.16, depth = 0.10;
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(dw + thick*2, dh + thick*2, depth),
+    palette.surround
+  );
+  frame.position.copy(facePos).add(faceDir.clone().multiplyScalar(depth/2 + 0.001));
+  frame.castShadow = frame.receiveShadow = true;
+  g.add(frame);
+
+  // Door pane
+  const pane = new THREE.Mesh(new THREE.PlaneGeometry(dw, dh), palette.door);
+  pane.position.copy(facePos).add(faceDir.clone().multiplyScalar(0.07));
+  g.add(pane);
+
+  // Threshold step
+  const step = new THREE.Mesh(
+    new THREE.BoxGeometry(dw + 0.45, 0.10, 0.40),
+    palette.surround
+  );
+  step.position.set(0, 0.50, -d/2 - 0.12);
+  step.castShadow = step.receiveShadow = true;
+  g.add(step);
+}
+
+function addWindow(g, faceDir, axis, perpSize, u, y, material, palette, withShutters){
   const pos = new THREE.Vector3();
   if (axis === 'x'){
     pos.set(u, y, faceDir.z * perpSize/2);
@@ -261,13 +328,11 @@ function addOpening(g, faceDir, axis, perpSize, u, y, isDoor, palette, material,
   }
   const yaw = Math.atan2(faceDir.x, faceDir.z);
 
-  // Surround
-  const showSurround = (material === 'granite') || (material === 'render') || isDoor || (material === 'timber' && isDoor);
+  const showSurround = material === 'granite' || material === 'render';
   if (showSurround){
-    const thick = isDoor ? 0.16 : 0.13;
-    const depth = (material === 'granite' || isDoor) ? 0.08 : 0.04;
+    const depth = material === 'granite' ? 0.08 : 0.04;
     const frame = new THREE.Mesh(
-      new THREE.BoxGeometry(ow + thick*2, oh + thick*2, depth),
+      new THREE.BoxGeometry(WINDOW_W + SURROUND_THICK*2, WINDOW_H + SURROUND_THICK*2, depth),
       palette.surround
     );
     frame.position.copy(pos).add(faceDir.clone().multiplyScalar(depth/2 + 0.001));
@@ -276,67 +341,87 @@ function addOpening(g, faceDir, axis, perpSize, u, y, isDoor, palette, material,
     g.add(frame);
   }
 
-  // Glass / door pane
-  const pane = new THREE.Mesh(
-    new THREE.PlaneGeometry(ow, oh),
-    isDoor ? palette.door : sharedGlass
-  );
+  // Glass
+  const pane = new THREE.Mesh(new THREE.PlaneGeometry(WINDOW_W, WINDOW_H), sharedGlass);
   pane.position.copy(pos).add(faceDir.clone().multiplyScalar(0.055));
   pane.rotation.y = yaw;
   g.add(pane);
 
-  // Sill (windows only, for granite/render)
-  if (!isDoor && (material === 'granite' || material === 'render')){
+  if (showSurround){
     const sill = new THREE.Mesh(
-      new THREE.BoxGeometry(ow + 0.45, 0.10, 0.22),
+      new THREE.BoxGeometry(WINDOW_W + 0.45, 0.10, 0.22),
       palette.surround
     );
     sill.position.copy(pos).add(faceDir.clone().multiplyScalar(0.10));
-    sill.position.y -= oh/2 + 0.08;
+    sill.position.y -= WINDOW_H/2 + 0.08;
     sill.rotation.y = yaw;
     sill.castShadow = sill.receiveShadow = true;
     g.add(sill);
+  }
+
+  if (withShutters){
+    const sw = SHUTTER_W - 0.04;
+    const sh = WINDOW_H + SURROUND_THICK*2 - 0.05;
+    const sd = 0.05;
+    const innerEdge = WINDOW_W/2 + SURROUND_THICK + 0.025;
+    for (const side of [-1, +1]){
+      const shutter = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, sd), palette.shutter);
+      const offset = new THREE.Vector3();
+      if (axis === 'x'){
+        offset.set(side * (innerEdge + sw/2), 0, 0);
+      } else {
+        offset.set(0, 0, side * (innerEdge + sw/2));
+      }
+      shutter.position.copy(pos).add(offset).add(faceDir.clone().multiplyScalar(sd/2 + 0.008));
+      shutter.rotation.y = yaw;
+      shutter.castShadow = shutter.receiveShadow = true;
+      g.add(shutter);
+    }
   }
 }
 
 function addOpenings(g, dims, palette, params, rng, preset){
   const {w, d, h, floors, storey} = dims;
+
+  // Door first — placed at front-face centre, so window bays must clear it
+  addDoor(g, dims, palette, preset);
+
+  const hasQuoins = params.material === 'granite' || preset === 'store' || preset === 'civic';
+  const shutterMode = params.shutters || 'some';  // 'none' | 'some' | 'all'
+  const allowShutters = shutterMode !== 'none';
+
+  // Door clearance radius on the front face (ground floor only)
+  const isStore = preset === 'store';
+  const isCivic = preset === 'civic';
+  const doorHalfW = (isStore ? 2.4 : (isCivic ? 1.4 : 1.05)) / 2 + 0.30;
+
   const faces = [
-    { dir: new THREE.Vector3(0, 0, -1), axis: 'x', size: w, perp: d, importance: 1.00, isFront: true  }, // FRONT (faces harbour, -Z)
-    { dir: new THREE.Vector3(0, 0,  1), axis: 'x', size: w, perp: d, importance: 0.55, isFront: false }, // back
-    { dir: new THREE.Vector3( 1, 0, 0), axis: 'z', size: d, perp: w, importance: 0.50, isFront: false }, // right
-    { dir: new THREE.Vector3(-1, 0, 0), axis: 'z', size: d, perp: w, importance: 0.50, isFront: false }, // left
+    { dir: new THREE.Vector3(0, 0, -1), axis: 'x', size: w, perp: d, importance: 1.00, isFront: true  },
+    { dir: new THREE.Vector3(0, 0,  1), axis: 'x', size: w, perp: d, importance: 0.55, isFront: false },
+    { dir: new THREE.Vector3( 1, 0, 0), axis: 'z', size: d, perp: w, importance: 0.50, isFront: false },
+    { dir: new THREE.Vector3(-1, 0, 0), axis: 'z', size: d, perp: w, importance: 0.50, isFront: false },
   ];
 
-  const baySpacing = preset === 'civic' ? 2.9 : (preset === 'store' ? 3.2 : 2.4);
-
   faces.forEach(face => {
-    const bays = Math.max(1, Math.round(face.size / baySpacing));
-    const bayW = face.size / bays;
-    const cx = bays % 2 === 1 ? Math.floor(bays/2) : -1;
+    const positions = computeBayPositions(face.size, hasQuoins, allowShutters, preset);
 
-    for (let s = 0; s < floors; s++){
-      for (let b = 0; b < bays; b++){
-        const isGround = s === 0;
-        const isCenter = b === cx;
-        const isDoor = face.isFront && isGround && isCenter;
-        // density gate (always place door)
-        if (!isDoor){
-          const threshold = params.winDensity * face.importance + (isGround ? -0.05 : 0.0);
-          if (rng.rand() > threshold) continue;
-        }
-        const u = -face.size/2 + (b + 0.5) * bayW;
-        const doorH = preset === 'store' ? 2.6 : (preset === 'civic' ? 2.4 : 2.05);
-        const y = isDoor
-          ? 0.45 + 0.05 + doorH/2
-          : 0.45 + s*storey + storey*0.52;
-        addOpening(g, face.dir, face.axis, face.perp, u, y, isDoor, palette, params.material, preset);
+    for (const u of positions){
+      // Decide once per column: does this vertical bay have windows on every storey?
+      const colDensity = params.winDensity * face.importance + 0.10;
+      if (rng.rand() > colDensity) continue;
+
+      // Decide once per column: does this bay carry shutters?
+      const colShutters = shutterMode === 'all'
+        ? true
+        : (shutterMode === 'some' ? (rng.rand() < 0.55) : false);
+
+      for (let s = 0; s < floors; s++){
+        // Ground-floor front bay near the door — skip to avoid collision
+        if (face.isFront && s === 0 && Math.abs(u) < doorHalfW) continue;
+
+        const y = 0.45 + s*storey + storey*0.52;
+        addWindow(g, face.dir, face.axis, face.perp, u, y, params.material, palette, colShutters);
       }
-    }
-
-    // For storehouse front, add a large loading door once (gable-end style)
-    if (preset === 'store' && face.isFront){
-      // already handled above by central door
     }
   });
 }

@@ -1,8 +1,9 @@
 # Editory
 
+> *Not the worship of the ashes — the veneration of the flame.*
 > A generator for Neo-Anglo-Norman architecture.
 
-A generative sandbox for Jersey vernacular — pink granite, lime render, slate, salt-aged everything — treated as a living architectural language rather than a heritage costume.
+A generative sandbox for Jersey vernacular — pink granite, lime render, slate, salt-aged everything — treated as a living architectural language rather than a heritage costume. The flame is the language; this is an attempt to carry it forward.
 
 Pull the sliders, watch a harbour front recompose itself across time of day, weather, and material register. The Atlantic light does most of the work.
 

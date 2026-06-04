@@ -259,6 +259,7 @@ function boot(){
         case 'roofPitch':  p.roofPitch = +v;   regen(); break;
         case 'material':   p.material = v;     regen(); break;
         case 'age':        p.age = +v;         regen(); break;
+        case 'shutters':   p.shutters = v;     regen(); break;
         case 'cars':       p.cars = +v;        regen(); break;
         case 'tod':        state.env.timeOfDay = +v; updateAtmosphere(); break;
         case 'rain':       state.env.rain = +v;

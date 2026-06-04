@@ -21,6 +21,7 @@ export function wireUI({ onGenerate, onReseed, onFrame, onScreenshot, onParam })
   $('roofPitch').oninput  = () => onParam('roofPitch', +$('roofPitch').value);
   $('material').onchange  = () => onParam('material', $('material').value);
   $('age').oninput        = () => onParam('age', +$('age').value);
+  $('shutters').onchange  = () => onParam('shutters', $('shutters').value);
   $('tod').oninput        = () => { onParam('tod', +$('tod').value); $('todVal').textContent = formatTod(+$('tod').value); };
   $('rain').oninput       = () => onParam('rain', +$('rain').value);
   $('cars').oninput       = () => { onParam('cars', +$('cars').value); $('carsVal').textContent = $('cars').value; };
@@ -31,6 +32,7 @@ export function wireUI({ onGenerate, onReseed, onFrame, onScreenshot, onParam })
   $('roofPitch').value  = state.params.roofPitch;
   $('material').value   = state.params.material;
   $('age').value        = state.params.age;
+  $('shutters').value   = state.params.shutters;
   $('tod').value        = state.env.timeOfDay;
   $('rain').value       = state.env.rain;
   $('cars').value       = state.params.cars;
