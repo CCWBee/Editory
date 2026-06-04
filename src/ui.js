@@ -1,4 +1,4 @@
-import { state } from './generator.js?v=06';
+import { state } from './generator.js?v=07';
 
 const $ = (id) => document.getElementById(id);
 const PRESET_LABELS = {

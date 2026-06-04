@@ -2,14 +2,14 @@ import {
   THREE, renderer, scene, camera, controls,
   hemi, sun, ambient, sunDisc, sea, road, wall, sky,
   districtGroup, carsGroup, lampGroup, rainGroup, homeCam, onResize
-} from './scene.js?v=06';
+} from './scene.js?v=07';
 
 import {
   state, generateDistrict, updateRainAmount,
   sharedGlass, sharedLampHead, sharedHeadlight, sharedTaillight
-} from './generator.js?v=06';
+} from './generator.js?v=07';
 
-import { wireUI, updateSeedHash, logToPanel } from './ui.js?v=06';
+import { wireUI, updateSeedHash, logToPanel } from './ui.js?v=07';
 
 const clock = new THREE.Clock();
 

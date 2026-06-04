@@ -4,7 +4,7 @@
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
 
 export const state = {
-  version: '0.6.0',
+  version: '0.7.0',
   seed: (Math.random()*1e9) >>> 0,
   env:    { timeOfDay: 13.5, rain: 0.1 },
   params: { preset: 'mix', winDensity: 0.7, roofPitch: 42, material: 'granite', age: 0.3, cars: 8, shutters: 'some' }
@@ -73,15 +73,30 @@ function makePalette(material, age, preset, rng){
 
   const wall = new THREE.MeshStandardMaterial({ color: c, roughness: 0.74 + age*0.16, metalness: family==='fibreglass'? 0.08 : 0.02 });
 
-  const surroundC = c.clone();
-  if (family === 'granite')      surroundC.offsetHSL(0,-0.06, 0.10);
-  else if (family === 'render')  surroundC.offsetHSL(0, 0, -0.10);
-  else if (family === 'slate')   surroundC.offsetHSL(0, 0, +0.10);
-  else if (family === 'timber')  surroundC.offsetHSL(0,-0.10, 0.05);
-  else                            surroundC.offsetHSL(0, 0, -0.06);
-  const surround = new THREE.MeshStandardMaterial({ color: surroundC, roughness: 0.78 });
+  // Surrounds / quoins. The Jersey rule: a rendered wall has a granite "skeleton"
+  // (quoins + lintels + cills + chimney stack in dressed pink granite). So
+  // render-walled buildings draw their surround colour from the granite palette,
+  // not from the render itself.
+  let surroundC;
+  if (family === 'render'){
+    surroundC = new THREE.Color(HEX_WALL.granite);
+    surroundC.offsetHSL((rng.rand()-0.5)*0.02, (rng.rand()-0.5)*0.05, (rng.rand()-0.5)*0.06);
+    agedify(surroundC, 'granite', age);
+    // Lighter dressed granite for quoins
+    surroundC.offsetHSL(0, -0.04, 0.05);
+  } else {
+    surroundC = c.clone();
+    if (family === 'granite')      surroundC.offsetHSL(0, -0.06, 0.10);
+    else if (family === 'slate')   surroundC.offsetHSL(0,  0,   0.10);
+    else if (family === 'timber')  surroundC.offsetHSL(0, -0.10, 0.05);
+    else                            surroundC.offsetHSL(0, 0,   -0.06);
+  }
+  const surround = new THREE.MeshStandardMaterial({ color: surroundC, roughness: 0.82 });
 
-  const plinthC = c.clone().offsetHSL(0, 0, -0.12);
+  // Plinth: on rendered walls this is a granite course at the base; elsewhere it's a darker shade of the wall.
+  const plinthC = family === 'render'
+    ? surroundC.clone().offsetHSL(0, 0.03, -0.08)
+    : c.clone().offsetHSL(0, 0, -0.12);
   const plinth = new THREE.MeshStandardMaterial({ color: plinthC, roughness: 0.92 });
 
   const roofC = new THREE.Color(0x3a3f4a);
@@ -104,7 +119,13 @@ function makePalette(material, age, preset, rng){
     color: rng.pick(paintPalette), roughness: 0.55, metalness: 0.0
   });
 
-  return { wall, surround, quoin: surround, plinth, roof, roofRidge, chimney: wall, chimneyCap, door, shutter };
+  // Chimney material: on rendered houses the stack is exposed granite (the
+  // Jersey rule); elsewhere chimneys match the wall.
+  const chimney = family === 'render'
+    ? new THREE.MeshStandardMaterial({ color: surroundC.clone().offsetHSL(0, 0.02, -0.05), roughness: 0.88 })
+    : wall;
+
+  return { wall, surround, quoin: surround, plinth, roof, roofRidge, chimney, chimneyCap, door, shutter };
 }
 
 function chooseDims(rng, preset){
@@ -142,6 +163,33 @@ function addShell(g, {w, d, h}, palette){
   m.position.y = h/2 + 0.45;
   m.castShadow = m.receiveShadow = true;
   g.add(m);
+}
+
+// St Aubin merchant typology — granite ground course + rendered upper, with a
+// thin granite string course at the join.
+function addSplitShell(g, {w, d, h, storey}, basePalette, upperPalette){
+  const baseH = storey;
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(w, baseH, d), basePalette.wall);
+  base.position.y = baseH/2 + 0.45;
+  base.castShadow = base.receiveShadow = true;
+  g.add(base);
+
+  const upperH = h - baseH;
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(w, upperH, d), upperPalette.wall);
+  upper.position.y = baseH + upperH/2 + 0.45;
+  upper.castShadow = upper.receiveShadow = true;
+  g.add(upper);
+
+  // Granite string course at the join — small horizontal band reading as a
+  // line of dressed stones.
+  const band = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.08, 0.16, d + 0.08),
+    basePalette.surround
+  );
+  band.position.y = baseH + 0.45 + 0.01;
+  band.castShadow = band.receiveShadow = true;
+  g.add(band);
 }
 
 function addQuoins(g, {w, d, h}, palette){
@@ -240,9 +288,11 @@ function addRoof(g, {w, d, h}, pitchDeg, palette){
 function addMansardRoof(g, dims, palette, rng){
   const { w, d, h } = dims;
   const baseY = h + 0.45;
-  const over = 0.32;
-  const steepH = 2.10 + rng.rand()*0.45;
-  const insetTop = 0.95 + rng.rand()*0.30;
+  const over = 0.40;
+  // Slope of ~55–62° — less steep than the first pass, so the slate face reads
+  // clearly from a street-level vantage rather than reading as flat-roof.
+  const steepH = 2.40 + rng.rand()*0.50;
+  const insetTop = 1.40 + rng.rand()*0.40;
   const topY = baseY + steepH;
   const topW = Math.max(0.6, w - 2*insetTop);
   const topD = Math.max(0.6, d - 2*insetTop);
@@ -297,11 +347,10 @@ function addMansardRoof(g, dims, palette, rng){
   topPlate.castShadow = true;
   g.add(topPlate);
 
-  // Dormers on the front slope
+  // Dormers — front always; sides often
   addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'front');
-  // Sometimes one or two on the sides too
-  if (rng.rand() < 0.4) addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'right');
-  if (rng.rand() < 0.4) addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'left');
+  if (rng.rand() < 0.65) addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'right');
+  if (rng.rand() < 0.65) addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'left');
 
   g.userData.roof = { type: 'mansard', topY, topW, topD, baseY };
 }
@@ -420,7 +469,9 @@ function addChimneys(g, dims, palette, rng, preset){
   }
 
   const {w, d} = dims;
-  const count = preset === 'civic' ? 2 : (rng.rand() < 0.55 ? 1 : 2);
+  // Twin gable-end chimneys are the iconic Jersey silhouette (fireplaces on
+  // both gable walls). Default to two; occasionally one for visual variety.
+  const count = rng.rand() < 0.80 ? 2 : 1;
 
   for (let i = 0; i < count; i++){
     const chW = roof.ridgeAlongZ ? 0.7 : 0.9;
@@ -644,24 +695,49 @@ function makeBuilding(rng, preset, params){
 
 function makeStandardBuilding(rng, preset, params){
   const dims = chooseDims(rng, preset);
-  const palette = makePalette(params.material, params.age, preset, rng);
+
+  // St Aubin merchant pattern: granite ground floor + render upper. Roll on
+  // domestic-scale presets. User material drives the upper — if they picked
+  // granite, we still split (upper becomes render) at a lower probability.
+  let wallMat = params.material;
+  let split = false;
+  if (preset === 'house' || preset === 'terrace' || preset === 'civic'){
+    const r = rng.rand();
+    if (params.material === 'render' && r < 0.40){ split = true; }
+    else if (params.material === 'granite' && r < 0.22){ split = true; wallMat = 'render'; }
+    else if (params.material === 'slate' && r < 0.20){ split = true; }
+  }
+
+  const palette = makePalette(wallMat, params.age, preset, rng);
+  const basePalette = split ? makePalette('granite', params.age, preset, rng) : null;
 
   const g = new THREE.Group();
   g.userData.preset = preset;
   g.userData.dims = dims;
 
-  addPlinth(g, dims, palette);
-  addShell(g, dims, palette);
+  addPlinth(g, dims, basePalette || palette);
 
-  if (params.material === 'granite' || preset === 'store' || preset === 'civic'){
+  if (split){
+    addSplitShell(g, dims, basePalette, palette);
+  } else {
+    addShell(g, dims, palette);
+  }
+
+  // Granite quoins are the Jersey rule: every dressed-stone wall has them,
+  // every rendered wall has them (granite skeleton showing through), and
+  // every split-material building has them running the full height.
+  if (wallMat === 'granite' || wallMat === 'render' || split
+      || preset === 'store' || preset === 'civic'){
     addQuoins(g, dims, palette);
   }
 
-  // Roll for a mansard roof — French/Haussmann register. Applies to wider
-  // civic and Victorian-era house types; storehouses keep their gables.
-  const mansardChance = preset === 'civic' ? 0.55
-                      : preset === 'house' ? 0.30
-                      : preset === 'terrace' ? 0.15
+  // Roll for a mansard roof — French/Haussmann register. Applies widely to
+  // Jersey civic, Victorian house and terrace stock; storehouses get the
+  // occasional shallow mansard too.
+  const mansardChance = preset === 'civic' ? 0.70
+                      : preset === 'house' ? 0.45
+                      : preset === 'terrace' ? 0.30
+                      : preset === 'store' ? 0.20
                       : 0;
   if (rng.rand() < mansardChance){
     addMansardRoof(g, dims, palette, rng);
@@ -830,13 +906,18 @@ function addOpeningsSidesOnly(g, dims, palette, params, rng){
   });
 }
 
-// 2. Granite-glass — the new Government of Jersey HQ register.
-//    Granite ground floor, glass curtain wall above with vertical granite fins,
-//    very shallow roof or near-flat, no chimneys, granite top band.
+// 2. Granite-glass — Cyril Le Marquand House register (St Helier, 2024).
+//    Double-storey textured granite base, recessed glass-and-fin upper with
+//    pronounced vertical granite mullions, horizontal granite slab at the
+//    join, standing-seam zinc mansard roof with dormers as the crown.
 function makeGraniteGlass(rng, params){
   const dims = chooseDims(rng, 'granite-glass');
-  const { w, d, h, floors, storey } = dims;
-  // Granite drives the wall palette regardless of user material picker.
+  const storey = 3.45;
+  const floors = 4;
+  const h = floors * storey;
+  const w = dims.w, d = dims.d;
+  Object.assign(dims, { storey, floors, h });
+
   const palette = makePalette('granite', params.age, 'granite-glass', rng);
 
   const g = new THREE.Group();
@@ -845,83 +926,91 @@ function makeGraniteGlass(rng, params){
 
   addPlinth(g, dims, palette);
 
-  // Granite ground floor mass
-  const base = new THREE.Mesh(new THREE.BoxGeometry(w, storey, d), palette.wall);
-  base.position.y = storey/2 + 0.45;
+  // Double-storey textured granite base — darker, deeper grain
+  const baseH = storey * 2;
+  const baseC = palette.wall.color.clone().offsetHSL(0, 0.02, -0.08);
+  const baseMat = new THREE.MeshStandardMaterial({ color: baseC, roughness: 0.88, metalness: 0.02 });
+  const base = new THREE.Mesh(new THREE.BoxGeometry(w, baseH, d), baseMat);
+  base.position.y = baseH/2 + 0.45;
   base.castShadow = base.receiveShadow = true;
   g.add(base);
 
-  // Glass upper mass — slightly inset
-  const upperH = h - storey;
-  const upperW = w * 0.96, upperD = d * 0.96;
+  // Recessed glass-and-fin upper
+  const upperH = h - baseH;
+  const upperW = w * 0.92;
+  const upperD = d * 0.92;
   const glassMat = new THREE.MeshStandardMaterial({
-    color: 0x6a8a99, roughness: 0.12, metalness: 0.62
+    color: 0x6a8a99, roughness: 0.10, metalness: 0.65
   });
   const upper = new THREE.Mesh(new THREE.BoxGeometry(upperW, upperH, upperD), glassMat);
-  upper.position.y = storey + upperH/2 + 0.45;
+  upper.position.y = baseH + upperH/2 + 0.45;
   upper.castShadow = upper.receiveShadow = true;
   g.add(upper);
 
-  // Vertical granite fins on all four facades (visual rhythm)
-  const finMat = palette.wall;
-  const placeFin = (x, z) => {
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.25, upperH, 0.35), finMat);
-    fin.position.set(x, storey + upperH/2 + 0.45, z);
-    fin.castShadow = fin.receiveShadow = true;
-    g.add(fin);
-  };
-  const finCountFront = Math.max(5, Math.floor(w / 2.0));
+  // Pronounced vertical granite fins on every facade of the upper mass
+  const finMat = new THREE.MeshStandardMaterial({ color: palette.wall.color, roughness: 0.82, metalness: 0.03 });
+  const finCountFront = Math.max(6, Math.floor(w / 1.7));
   for (let i = 0; i <= finCountFront; i++){
     const x = -w/2 + (i / finCountFront) * w;
-    placeFin(x, -d/2 - 0.10);
-    placeFin(x, +d/2 + 0.10);
+    for (const sz of [-1, +1]){
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.30, upperH - 0.12, 0.45), finMat);
+      fin.position.set(x, baseH + upperH/2 + 0.45, sz * (upperD/2 + 0.18));
+      fin.castShadow = fin.receiveShadow = true;
+      g.add(fin);
+    }
   }
-  const finCountSide = Math.max(4, Math.floor(d / 2.3));
+  const finCountSide = Math.max(4, Math.floor(d / 1.9));
   for (let i = 0; i <= finCountSide; i++){
     const z = -d/2 + (i / finCountSide) * d;
-    placeFin(-w/2 - 0.10, z);
-    placeFin(+w/2 + 0.10, z);
+    for (const sx of [-1, +1]){
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.45, upperH - 0.12, 0.30), finMat);
+      fin.position.set(sx * (upperW/2 + 0.18), baseH + upperH/2 + 0.45, z);
+      fin.castShadow = fin.receiveShadow = true;
+      g.add(fin);
+    }
   }
 
-  // Granite slab between ground and upper — a horizontal expression of the join
+  // Strong horizontal granite slab between base and upper
   const joinBand = new THREE.Mesh(
-    new THREE.BoxGeometry(w + 0.10, 0.25, d + 0.10),
+    new THREE.BoxGeometry(w + 0.22, 0.32, d + 0.22),
     palette.surround
   );
-  joinBand.position.y = storey + 0.45 + 0.025;
+  joinBand.position.y = baseH + 0.45 + 0.16;
   joinBand.castShadow = joinBand.receiveShadow = true;
   g.add(joinBand);
 
-  // Top cornice — granite cap reading as the eaves
-  const top = new THREE.Mesh(
-    new THREE.BoxGeometry(w + 0.30, 0.40, d + 0.30),
+  // Top granite cornice — reading as the eave, just below the mansard
+  const topBand = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.20, 0.36, d + 0.20),
     palette.surround
   );
-  top.position.y = h + 0.45 - 0.20;
-  top.castShadow = top.receiveShadow = true;
-  g.add(top);
+  topBand.position.y = h + 0.45 - 0.18;
+  topBand.castShadow = topBand.receiveShadow = true;
+  g.add(topBand);
 
-  // Very shallow pitch roof — almost reads as flat
-  const flatPitch = 8;
-  addRoof(g, { ...dims, h: h - 0.05 }, flatPitch, palette);
+  // Standing-seam zinc mansard — the Cyril Le Marquand crown
+  const zincPalette = Object.assign({}, palette, {
+    roof: new THREE.MeshStandardMaterial({ color: 0x7d838b, roughness: 0.45, metalness: 0.42 }),
+    roofRidge: new THREE.MeshStandardMaterial({ color: 0x60656d, roughness: 0.55, metalness: 0.38 }),
+  });
+  addMansardRoof(g, dims, zincPalette, rng);
 
-  // Ground-floor entrance — a wide civic-style door
+  // Civic-style large door at centre of base
   addDoor(g, dims, palette, 'civic');
 
-  // Ground-floor windows in granite surrounds (the upper is already all glass)
-  const hasQuoins = false; // smooth granite — no quoins on contemporary
-  const groundPositions = computeBayPositions(w, hasQuoins, false, 'civic');
-  const doorHalfW = 0.7 + 0.25;
+  // Granite-surround windows on both base storeys
+  const groundPositions = computeBayPositions(w, false, false, 'civic');
+  const doorHalfW = 1.4/2 + 0.30;
   for (const u of groundPositions){
     if (Math.abs(u) < doorHalfW) continue;
-    const y = 0.45 + storey * 0.52;
-    addWindow(g, new THREE.Vector3(0, 0, -1), 'x', d, u, y, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3(0, 0, -1), 'x', d, u, 0.45 + storey * 0.5, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3(0, 0, -1), 'x', d, u, 0.45 + storey + storey * 0.5, 'granite', palette, false);
   }
-  // Sides — fewer ground openings
   for (const u of computeBayPositions(d, false, false, 'civic').slice(0, 2)){
-    const y = 0.45 + storey * 0.52;
-    addWindow(g, new THREE.Vector3( 1, 0, 0), 'z', w, u, y, 'granite', palette, false);
-    addWindow(g, new THREE.Vector3(-1, 0, 0), 'z', w, u, y, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3( 1, 0, 0), 'z', w, u, 0.45 + storey * 0.5, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3(-1, 0, 0), 'z', w, u, 0.45 + storey * 0.5, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3( 1, 0, 0), 'z', w, u, 0.45 + storey + storey * 0.5, 'granite', palette, false);
+    addWindow(g, new THREE.Vector3(-1, 0, 0), 'z', w, u, 0.45 + storey + storey * 0.5, 'granite', palette, false);
   }
 
   return g;
