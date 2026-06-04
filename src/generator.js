@@ -4,7 +4,7 @@
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
 
 export const state = {
-  version: '0.5.0',
+  version: '0.6.0',
   seed: (Math.random()*1e9) >>> 0,
   env:    { timeOfDay: 13.5, rain: 0.1 },
   params: { preset: 'mix', winDensity: 0.7, roofPitch: 42, material: 'granite', age: 0.3, cars: 8, shutters: 'some' }
@@ -231,12 +231,194 @@ function addRoof(g, {w, d, h}, pitchDeg, palette){
   cap.castShadow = true;
   g.add(cap);
 
-  g.userData.roof = { ridgeAlongZ, peakY, W, D, baseY, ridgeH };
+  g.userData.roof = { type: 'gable', ridgeAlongZ, peakY, W, D, baseY, ridgeH };
+}
+
+// Mansard — the French/Haussmannian register. Steep lower slopes on all four
+// sides, near-flat top, dormer windows poking out of the front slope. Common
+// on Jersey civic and Victorian houses too.
+function addMansardRoof(g, dims, palette, rng){
+  const { w, d, h } = dims;
+  const baseY = h + 0.45;
+  const over = 0.32;
+  const steepH = 2.10 + rng.rand()*0.45;
+  const insetTop = 0.95 + rng.rand()*0.30;
+  const topY = baseY + steepH;
+  const topW = Math.max(0.6, w - 2*insetTop);
+  const topD = Math.max(0.6, d - 2*insetTop);
+
+  // Lower mansard — 4 trapezoidal slopes, one per facade
+  const v = new Float32Array([
+    -w/2 - over, baseY, -d/2 - over,  // 0 front-left eave
+     w/2 + over, baseY, -d/2 - over,  // 1 front-right eave
+     w/2 + over, baseY,  d/2 + over,  // 2 back-right eave
+    -w/2 - over, baseY,  d/2 + over,  // 3 back-left eave
+    -topW/2, topY, -topD/2,           // 4 front-left knuckle
+     topW/2, topY, -topD/2,           // 5 front-right knuckle
+     topW/2, topY,  topD/2,           // 6 back-right knuckle
+    -topW/2, topY,  topD/2,           // 7 back-left knuckle
+  ]);
+  const idx = new Uint16Array([
+    0,1,5,  0,5,4,    // front slope (-Z outward)
+    1,2,6,  1,6,5,    // right slope (+X outward)
+    2,3,7,  2,7,6,    // back slope  (+Z outward)
+    3,0,4,  3,4,7,    // left slope  (-X outward)
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeVertexNormals();
+  const mansard = new THREE.Mesh(geo, palette.roof);
+  mansard.castShadow = mansard.receiveShadow = true;
+  g.add(mansard);
+
+  // Lower knuckle cap — a thin slate band where the slope changes angle
+  for (const side of [-1, +1]){
+    const capX = new THREE.Mesh(
+      new THREE.BoxGeometry(topW + 0.12, 0.08, 0.18),
+      palette.roofRidge
+    );
+    capX.position.set(0, topY + 0.04, side * topD/2);
+    g.add(capX);
+    const capZ = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.08, topD + 0.12),
+      palette.roofRidge
+    );
+    capZ.position.set(side * topW/2, topY + 0.04, 0);
+    g.add(capZ);
+  }
+
+  // Flat top (or near-flat — a single low-pitch plate)
+  const topPlate = new THREE.Mesh(
+    new THREE.BoxGeometry(topW + 0.04, 0.20, topD + 0.04),
+    palette.roofRidge
+  );
+  topPlate.position.y = topY + 0.10;
+  topPlate.castShadow = true;
+  g.add(topPlate);
+
+  // Dormers on the front slope
+  addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'front');
+  // Sometimes one or two on the sides too
+  if (rng.rand() < 0.4) addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'right');
+  if (rng.rand() < 0.4) addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, 'left');
+
+  g.userData.roof = { type: 'mansard', topY, topW, topD, baseY };
+}
+
+function addDormersOnSlope(g, dims, palette, baseY, topY, insetTop, over, rng, slope){
+  const { w, d } = dims;
+  // Slope geometry: from eave (at over outside footprint) to knuckle (insetTop inside)
+  const slopeLen = slope === 'front' || slope === 'back' ? w : d;
+  const slopePerp = slope === 'front' || slope === 'back' ? d : w;
+  const dormerCount = Math.max(1, Math.floor(slopeLen / 2.8));
+  if (dormerCount === 0) return;
+  const t = 0.50;  // fraction up the slope
+
+  const dormerW = 1.05, dormerH = 1.15, dormerD = 0.75;
+  const insetFromEnds = 0.6;
+
+  // Compute slope direction & position at fraction t
+  let nx = 0, nz = 0;     // outward normal of dormer's front
+  let baseOffsetAlong = 0; // along-slope offset where dormer sits
+  if (slope === 'front'){ nz = -1; }
+  else if (slope === 'back'){ nz = +1; }
+  else if (slope === 'left'){ nx = -1; }
+  else if (slope === 'right'){ nx = +1; }
+
+  const dy = baseY + t * (topY - baseY);
+
+  for (let i = 0; i < dormerCount; i++){
+    const along = -slopeLen/2 + insetFromEnds + (i + 0.5) * ((slopeLen - 2*insetFromEnds) / dormerCount);
+    if (along < -slopeLen/2 + 0.4 || along > slopeLen/2 - 0.4) continue;
+
+    let dx, dz;
+    if (slope === 'front' || slope === 'back'){
+      dx = along;
+      // dormer face position on slope
+      const slopeEdgeZ = (slope === 'front' ? -1 : +1) * (slopePerp/2 + over);
+      const slopeTopZ  = (slope === 'front' ? -1 : +1) * (slopePerp/2 - insetTop);
+      dz = slopeEdgeZ * (1-t) + slopeTopZ * t;
+    } else {
+      dz = along;
+      const slopeEdgeX = (slope === 'left' ? -1 : +1) * (slopePerp/2 + over);
+      const slopeTopX  = (slope === 'left' ? -1 : +1) * (slopePerp/2 - insetTop);
+      dx = slopeEdgeX * (1-t) + slopeTopX * t;
+    }
+
+    // The dormer's outward axis points outward along (nx, 0, nz) from the slope surface
+    const out = new THREE.Vector3(nx, 0, nz);
+    const yaw = Math.atan2(out.x, out.z);
+
+    // Wall box of dormer — protrudes outward slightly past the slope surface
+    const wall = new THREE.Mesh(
+      new THREE.BoxGeometry(dormerW, dormerH, dormerD),
+      palette.wall
+    );
+    wall.position.set(dx, dy + dormerH/2 - 0.05, dz)
+        .add(out.clone().multiplyScalar(dormerD/2 - 0.05));
+    wall.rotation.y = yaw;
+    wall.castShadow = wall.receiveShadow = true;
+    g.add(wall);
+
+    // Tiny pitched cap above the dormer (slate)
+    const cap = new THREE.Mesh(
+      new THREE.BoxGeometry(dormerW + 0.18, 0.14, dormerD + 0.10),
+      palette.roof
+    );
+    cap.position.set(dx, dy + dormerH + 0.04, dz)
+       .add(out.clone().multiplyScalar(dormerD/2 - 0.05));
+    cap.rotation.y = yaw;
+    cap.castShadow = true;
+    g.add(cap);
+
+    // Window on the front face of the dormer
+    const winW = 0.70, winH = 0.85;
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), sharedGlass);
+    const winPos = new THREE.Vector3(dx, dy + dormerH/2 - 0.05, dz)
+                     .add(out.clone().multiplyScalar(dormerD + 0.005));
+    win.position.copy(winPos);
+    win.rotation.y = yaw;
+    g.add(win);
+
+    // Surround
+    const surround = new THREE.Mesh(
+      new THREE.BoxGeometry(winW + 0.18, winH + 0.18, 0.04),
+      palette.surround
+    );
+    surround.position.copy(winPos).add(out.clone().multiplyScalar(-0.02));
+    surround.rotation.y = yaw;
+    g.add(surround);
+  }
 }
 
 function addChimneys(g, dims, palette, rng, preset){
   const roof = g.userData.roof;
   if (!roof) return;
+
+  // Mansard: chimneys sit on the corners of the flat top
+  if (roof.type === 'mansard'){
+    const { topY, topW, topD } = roof;
+    const count = rng.rand() < 0.6 ? 2 : 1;
+    const corners = [
+      [ topW/2 - 0.6,  topD/2 - 0.6],
+      [-topW/2 + 0.6,  topD/2 - 0.6],
+    ];
+    for (let i = 0; i < count; i++){
+      const [cx, cz] = corners[i];
+      const chH = 1.4 + rng.rand()*0.5;
+      const ch = new THREE.Mesh(new THREE.BoxGeometry(0.70, chH, 0.70), palette.chimney);
+      ch.position.set(cx, topY + chH/2 + 0.1, cz);
+      ch.castShadow = ch.receiveShadow = true;
+      g.add(ch);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.14, 0.88), palette.chimneyCap);
+      cap.position.set(cx, topY + chH + 0.17, cz);
+      cap.castShadow = true;
+      g.add(cap);
+    }
+    return;
+  }
+
   const {w, d} = dims;
   const count = preset === 'civic' ? 2 : (rng.rand() < 0.55 ? 1 : 2);
 
@@ -475,7 +657,17 @@ function makeStandardBuilding(rng, preset, params){
     addQuoins(g, dims, palette);
   }
 
-  addRoof(g, dims, params.roofPitch, palette);
+  // Roll for a mansard roof — French/Haussmann register. Applies to wider
+  // civic and Victorian-era house types; storehouses keep their gables.
+  const mansardChance = preset === 'civic' ? 0.55
+                      : preset === 'house' ? 0.30
+                      : preset === 'terrace' ? 0.15
+                      : 0;
+  if (rng.rand() < mansardChance){
+    addMansardRoof(g, dims, palette, rng);
+  } else {
+    addRoof(g, dims, params.roofPitch, palette);
+  }
   addChimneys(g, dims, palette, rng, preset);
 
   if (preset === 'civic') addCornice(g, dims, palette);
@@ -953,24 +1145,126 @@ function addStreetlights(lampGroup, rng){
   }
 }
 
+// Shared car materials — emissive lights are updated from main.js for dusk/night
+export const sharedHeadlight = new THREE.MeshStandardMaterial({
+  color: 0xfff0c4, emissive: 0xffd980, emissiveIntensity: 0.35, roughness: 0.3
+});
+export const sharedTaillight = new THREE.MeshStandardMaterial({
+  color: 0xff6050, emissive: 0xc02818, emissiveIntensity: 0.30, roughness: 0.3
+});
+
+function buildCar(rng){
+  // Three loose body archetypes — sedan, hatchback, van — picked by a roll.
+  const archetype = (() => {
+    const r = rng.rand();
+    if (r < 0.55) return 'sedan';
+    if (r < 0.85) return 'hatch';
+    return 'van';
+  })();
+
+  const col = new THREE.Color().setHSL(rng.rand(), 0.32 + rng.rand()*0.28, 0.40 + rng.rand()*0.18);
+  const bodyMat  = new THREE.MeshStandardMaterial({ color: col, roughness: 0.32, metalness: 0.55 });
+  const trimMat  = new THREE.MeshStandardMaterial({ color: col.clone().multiplyScalar(0.62), roughness: 0.5, metalness: 0.3 });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x0c1018, roughness: 0.15, metalness: 0.45 });
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0e1116, roughness: 0.85 });
+  const hubMat   = new THREE.MeshStandardMaterial({ color: 0x7a8088, roughness: 0.5, metalness: 0.7 });
+
+  const car = new THREE.Group();
+
+  // Archetype proportions
+  let bodyL, bodyW, bodyH, cabinL, cabinH, cabinOffset, hoodL;
+  if (archetype === 'sedan'){
+    bodyL = 4.1; bodyW = 1.78; bodyH = 0.45;
+    cabinL = 1.95; cabinH = 0.65; cabinOffset = -0.10; hoodL = 0.95;
+  } else if (archetype === 'hatch'){
+    bodyL = 3.55; bodyW = 1.72; bodyH = 0.45;
+    cabinL = 1.85; cabinH = 0.70; cabinOffset = -0.20; hoodL = 0.55;
+  } else {
+    bodyL = 4.5;  bodyW = 1.85; bodyH = 0.55;
+    cabinL = 2.6;  cabinH = 0.95; cabinOffset = 0.20; hoodL = 0.45;
+  }
+
+  const wheelR = bodyH * 0.55 + 0.08;
+  const groundY = wheelR;            // wheel axle height
+  const bodyY = groundY + bodyH/2;
+  const cabinY = bodyY + bodyH/2 + cabinH/2 - 0.02;
+
+  // Chassis / body
+  const body = new THREE.Mesh(new THREE.BoxGeometry(bodyW, bodyH, bodyL), bodyMat);
+  body.position.y = bodyY;
+  body.castShadow = body.receiveShadow = true;
+  car.add(body);
+
+  // Bonnet / hood (slightly thinner slab in front of cabin, gives a sloped silhouette)
+  if (hoodL > 0.1){
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(bodyW * 0.94, bodyH * 0.7, hoodL), bodyMat);
+    hood.position.set(0, bodyY + bodyH * 0.18, cabinOffset + cabinL/2 + hoodL/2);
+    hood.castShadow = true;
+    car.add(hood);
+  }
+
+  // Cabin / greenhouse
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(bodyW * 0.92, cabinH, cabinL), trimMat);
+  cabin.position.set(0, cabinY, cabinOffset);
+  cabin.castShadow = cabin.receiveShadow = true;
+  car.add(cabin);
+
+  // Side glass — slim band on each side
+  const sideGlass = new THREE.Mesh(
+    new THREE.BoxGeometry(bodyW * 0.94, cabinH * 0.62, cabinL * 0.88),
+    glassMat
+  );
+  sideGlass.position.set(0, cabinY + cabinH * 0.04, cabinOffset);
+  car.add(sideGlass);
+
+  // Wheels — four cylinders, axles along X
+  const wheelGeo = new THREE.CylinderGeometry(wheelR, wheelR, 0.22, 14);
+  const wheelInset = 0.04;
+  const wheelZ = bodyL/2 - wheelR - 0.10;
+  const wheelX = bodyW/2 - wheelInset;
+  for (const [sx, sz] of [[+1,+1],[-1,+1],[+1,-1],[-1,-1]]){
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.position.set(sx * wheelX, wheelR, sz * wheelZ);
+    wheel.rotation.z = Math.PI/2;
+    wheel.castShadow = wheel.receiveShadow = true;
+    car.add(wheel);
+    // Hub cap
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(wheelR * 0.45, wheelR * 0.45, 0.24, 10), hubMat);
+    hub.position.copy(wheel.position);
+    hub.rotation.z = Math.PI/2;
+    car.add(hub);
+  }
+
+  // Headlights at the front (front = +Z in local frame; orientation handled by rotation.y)
+  for (const sx of [-1, +1]){
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.16, 0.06), sharedHeadlight);
+    hl.position.set(sx * (bodyW/2 - 0.28), bodyY + bodyH * 0.10, bodyL/2 - 0.02);
+    car.add(hl);
+  }
+
+  // Taillights at the back
+  for (const sx of [-1, +1]){
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.06), sharedTaillight);
+    tl.position.set(sx * (bodyW/2 - 0.28), bodyY + bodyH * 0.08, -bodyL/2 + 0.02);
+    car.add(tl);
+  }
+
+  // Number-plate area (small white strip — purely cosmetic)
+  const plate = new THREE.Mesh(
+    new THREE.BoxGeometry(0.50, 0.12, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0xe8d870, roughness: 0.5 })
+  );
+  plate.position.set(0, bodyY - bodyH * 0.10, -bodyL/2 - 0.005);
+  car.add(plate);
+
+  return car;
+}
+
 function addCars(carsGroup, count, rng){
   for (let i = 0; i < count; i++){
-    const col = new THREE.Color().setHSL(rng.rand(), 0.35 + rng.rand()*0.25, 0.42 + rng.rand()*0.15);
-    const car = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.55, 3.7),
-      new THREE.MeshStandardMaterial({ color: col, roughness: 0.4, metalness: 0.5 }));
-    body.position.y = 0.4;
-    body.castShadow = body.receiveShadow = true;
-    car.add(body);
-
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.5, 1.85),
-      new THREE.MeshStandardMaterial({ color: 0x1c2028, roughness: 0.25, metalness: 0.4 }));
-    cabin.position.set(0, 0.95, -0.15);
-    cabin.castShadow = true;
-    car.add(cabin);
-
+    const car = buildCar(rng);
     car.userData.speed = (rng.rand() < 0.5 ? 1 : -1) * (3 + rng.rand()*5);
-    car.userData.lane = rng.rand() < 0.5 ? -4.6 : -7.0;
+    car.userData.lane  = rng.rand() < 0.5 ? -4.6 : -7.0;
     car.position.x = (rng.rand() - 0.5) * 110;
     car.position.z = car.userData.lane;
     car.rotation.y = car.userData.speed > 0 ? Math.PI/2 : -Math.PI/2;

@@ -2,14 +2,14 @@ import {
   THREE, renderer, scene, camera, controls,
   hemi, sun, ambient, sunDisc, sea, road, wall, sky,
   districtGroup, carsGroup, lampGroup, rainGroup, homeCam, onResize
-} from './scene.js';
+} from './scene.js?v=06';
 
 import {
   state, generateDistrict, updateRainAmount,
-  sharedGlass, sharedLampHead
-} from './generator.js';
+  sharedGlass, sharedLampHead, sharedHeadlight, sharedTaillight
+} from './generator.js?v=06';
 
-import { wireUI, updateSeedHash, logToPanel } from './ui.js';
+import { wireUI, updateSeedHash, logToPanel } from './ui.js?v=06';
 
 const clock = new THREE.Clock();
 
@@ -166,6 +166,8 @@ function updateAtmosphere(){
   const darkness = THREE.MathUtils.clamp(0.25 - sunInfo.elev, 0, 1);
   sharedGlass.emissiveIntensity = darkness * 1.4;
   sharedLampHead.emissiveIntensity = darkness * 1.3;
+  sharedHeadlight.emissiveIntensity = dark ? 1.5 : 0.30;
+  sharedTaillight.emissiveIntensity = dark ? 1.1 : 0.28;
   lampGroup.children.forEach(c => {
     if (c.isPointLight){
       c.intensity = dark ? (1.1 + Math.sin((performance.now() + c.userData.flicker)*0.005) * 0.10) : 0.0;
