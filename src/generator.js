@@ -4,7 +4,7 @@
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
 
 export const state = {
-  version: '0.7.0',
+  version: '0.8.0',
   seed: (Math.random()*1e9) >>> 0,
   env:    { timeOfDay: 13.5, rain: 0.1 },
   params: { preset: 'mix', winDensity: 0.7, roofPitch: 42, material: 'granite', age: 0.3, cars: 8, shutters: 'some' }
@@ -28,7 +28,7 @@ function mulberry32(a){
     return ((t ^ (t>>>14)) >>> 0) / 4294967296;
   };
 }
-function rngFor(seed){
+export function rngFor(seed){
   const r = mulberry32(seed);
   return { rand: r, range:(a,b)=> a + (b-a)*r(), int:(n)=> Math.floor(r()*n), pick:(arr)=> arr[Math.floor(r()*arr.length)] };
 }
@@ -128,7 +128,7 @@ function makePalette(material, age, preset, rng){
   return { wall, surround, quoin: surround, plinth, roof, roofRidge, chimney, chimneyCap, door, shutter };
 }
 
-function chooseDims(rng, preset){
+function chooseDims(rng, preset, lim = {}){
   let w, d, floors, storey = 3.1;
   switch (preset){
     case 'terrace':
@@ -148,6 +148,9 @@ function chooseDims(rng, preset){
     default:
       w = rng.range(6, 10); d = rng.range(8, 13); floors = 2;
   }
+  // Parish mode places buildings on fixed plots — clamp footprint to fit.
+  if (lim.maxW && w > lim.maxW) w = lim.maxW;
+  if (lim.maxD && d > lim.maxD) d = lim.maxD;
   return { w, d, floors, storey, h: floors*storey };
 }
 
@@ -684,17 +687,17 @@ function addCornice(g, {w, d, h}, palette){
   g.add(eaves);
 }
 
-function makeBuilding(rng, preset, params){
+export function makeBuilding(rng, preset, params, lim = {}){
   switch (preset){
-    case 'bow':           return makeBowfront(rng, params);
-    case 'granite-glass': return makeGraniteGlass(rng, params);
-    case 'future':        return makeFutureHouse(rng, params);
-    default:              return makeStandardBuilding(rng, preset, params);
+    case 'bow':           return makeBowfront(rng, params, lim);
+    case 'granite-glass': return makeGraniteGlass(rng, params, lim);
+    case 'future':        return makeFutureHouse(rng, params, lim);
+    default:              return makeStandardBuilding(rng, preset, params, lim);
   }
 }
 
-function makeStandardBuilding(rng, preset, params){
-  const dims = chooseDims(rng, preset);
+function makeStandardBuilding(rng, preset, params, lim = {}){
+  const dims = chooseDims(rng, preset, lim);
 
   // St Aubin merchant pattern: granite ground floor + render upper. Roll on
   // domestic-scale presets. User material drives the upper — if they picked
@@ -761,8 +764,8 @@ function makeStandardBuilding(rng, preset, params){
 //    shallow semicircular bow extending the full front facade.
 const RENDER_BOW_COLOURS = [0xefe8d4, 0xeac9b0, 0xd6c08e, 0xc8dde0, 0xead2c2, 0xe8c8c8, 0xd5e3d2, 0xdfdcd0];
 
-function makeBowfront(rng, params){
-  const dims = chooseDims(rng, 'bow');
+function makeBowfront(rng, params, lim = {}){
+  const dims = chooseDims(rng, 'bow', lim);
   const { w, d, h, floors, storey } = dims;
 
   // Painted render dominates this register regardless of user material;
@@ -910,8 +913,8 @@ function addOpeningsSidesOnly(g, dims, palette, params, rng){
 //    Double-storey textured granite base, recessed glass-and-fin upper with
 //    pronounced vertical granite mullions, horizontal granite slab at the
 //    join, standing-seam zinc mansard roof with dormers as the crown.
-function makeGraniteGlass(rng, params){
-  const dims = chooseDims(rng, 'granite-glass');
+function makeGraniteGlass(rng, params, lim = {}){
+  const dims = chooseDims(rng, 'granite-glass', lim);
   const storey = 3.45;
   const floors = 4;
   const h = floors * storey;
@@ -1019,8 +1022,8 @@ function makeGraniteGlass(rng, params){
 // 3. Future house — Jersey vernacular grown forward. Granite base + lighter
 //    upper (timber or render), larger window openings, deeper reveals, gabled
 //    roof and chimney preserved. The veneration-of-the-flame register.
-function makeFutureHouse(rng, params){
-  const dims = chooseDims(rng, 'future');
+function makeFutureHouse(rng, params, lim = {}){
+  const dims = chooseDims(rng, 'future', lim);
   const { w, d, h, floors, storey } = dims;
 
   const granitePalette = makePalette('granite', params.age, 'future', rng);

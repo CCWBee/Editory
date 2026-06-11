@@ -134,6 +134,47 @@
     #about .close:hover{color:var(--ink);transform:none}
     #about footer{font-size:11px;color:var(--hint);border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
 
+    /* --- mode tabs --- */
+    .tabs{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    .tabs button{border:0;border-radius:0;background:rgba(255,255,255,.02);padding:6px 4px;font-size:11.5px;color:var(--ink-dim);font-weight:600;letter-spacing:.04em}
+    .tabs button:not(:last-child){border-right:1px solid var(--line)}
+    .tabs button:hover{background:rgba(255,255,255,.07);transform:none}
+    .tabs button.active{background:rgba(214,176,122,.18);color:var(--accent-bright)}
+    body.parish .sandbox-only{display:none}
+    body:not(.parish) .parish-only{display:none}
+
+    /* --- parish stats --- */
+    .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center}
+    .stat .num{font-family:"SF Mono",Consolas,monospace;font-size:14px;color:var(--accent-bright);font-variant-numeric:tabular-nums}
+    .stat .lbl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--hint);margin-top:1px}
+    .weather-row{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--ink-dim);
+      border-top:1px solid var(--line);padding-top:6px}
+    .weather-row #statIncome{font-family:"SF Mono",Consolas,monospace;color:var(--good);font-size:11px}
+
+    /* --- build cards --- */
+    .build-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px}
+    .build-card{display:flex;flex-direction:column;gap:2px;text-align:left;padding:6px 8px;
+      background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:7px;font-family:inherit}
+    .build-card .bc-row{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+    .build-card .bc-name{font-size:11px;font-weight:600;color:var(--ink)}
+    .build-card .bc-cost{font-family:"SF Mono",Consolas,monospace;font-size:10px;color:var(--accent)}
+    .build-card .bc-meta{font-size:9.5px;color:var(--hint)}
+    .build-card .bc-req{font-size:9px;color:#d07b6b;display:none}
+    .build-card.active{background:rgba(214,176,122,.13);border-color:var(--accent);box-shadow:0 0 0 1px rgba(214,176,122,.25) inset}
+    .build-card.broke .bc-cost{color:#d07b6b}
+    .build-card.locked{opacity:.45;cursor:not-allowed}
+    .build-card.locked .bc-req{display:inline}
+    .build-card.locked .bc-meta{display:none}
+    #btnBulldoze.active{background:rgba(208,123,107,.18);border-color:#d07b6b;color:#f0b0a0}
+
+    /* --- event log --- */
+    #eventLog{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;
+      font-size:10.5px;color:var(--ink-dim);line-height:1.35}
+    #eventLog li:first-child{color:var(--ink)}
+    .sec-title .linkish{background:none;border:0;padding:0;color:var(--hint);font-size:10px;letter-spacing:.05em;
+      text-transform:uppercase;cursor:pointer}
+    .sec-title .linkish:hover{color:#d07b6b;transform:none}
+
     /* Tiny credit */
     #attrib{position:fixed;bottom:10px;right:14px;font-size:10px;color:#7a8390;letter-spacing:.04em;text-transform:uppercase;
       font-family:"SF Mono",Consolas,monospace;z-index:5}
@@ -149,14 +190,47 @@
       </div>
     </header>
 
+    <div class="tabs" id="modeTabs">
+      <button data-mode="sandbox" class="active">Sandbox</button>
+      <button data-mode="parish">Parish · game</button>
+    </div>
+
     <div class="toolbar">
-      <button id="btnGenerate" class="primary grow">Generate</button>
-      <button id="btnReseed" title="Reseed (R)">⟲</button>
+      <button id="btnGenerate" class="primary grow sandbox-only">Generate</button>
+      <button id="btnReseed" class="sandbox-only" title="Reseed (R)">⟲</button>
       <button id="btnFrame" title="Reset view (F)">⌂</button>
       <button id="btnShot" title="Save PNG">⤓</button>
     </div>
 
-    <div class="sec">
+    <div class="sec parish-only">
+      <div class="stats-grid">
+        <div class="stat"><div class="num" id="statTreasury">£1500</div><div class="lbl">treasury</div></div>
+        <div class="stat"><div class="num" id="statPop">0</div><div class="lbl">residents</div></div>
+        <div class="stat"><div class="num" id="statChar">0</div><div class="lbl">character</div></div>
+        <div class="stat"><div class="num" id="statDay">1</div><div class="lbl">day</div></div>
+      </div>
+      <div class="weather-row"><span id="statWeather">Fair over the harbour</span><span id="statIncome"></span></div>
+    </div>
+
+    <div class="sec parish-only">
+      <div class="sec-title">Build <em id="toolLabel">select a card</em></div>
+      <div class="build-grid" id="buildGrid"></div>
+      <div class="toolbar">
+        <button id="btnBulldoze" class="grow">Demolish</button>
+        <div class="segmented" id="speedSeg" style="flex:1.1">
+          <button data-speed="0" title="Pause">⏸</button>
+          <button data-speed="1" class="active" title="Normal speed">▶</button>
+          <button data-speed="3" title="Fast">▶▶</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec parish-only">
+      <div class="sec-title">Parish log <button id="btnNewParish" class="linkish" title="Raze everything and start over">new parish</button></div>
+      <ul id="eventLog"></ul>
+    </div>
+
+    <div class="sec sandbox-only">
       <div class="sec-title">Preset <em id="presetLabel">District mix</em></div>
       <div class="preset-grid" id="presetGrid">
         <button class="preset-btn" data-preset="mix" title="District mix — blends all seven registers">
@@ -194,7 +268,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec sandbox-only">
       <div class="sec-title">Material <em id="matLabel">Pink granite</em></div>
       <div class="mat-grid" id="matGrid">
         <button class="mat-btn granite"    data-mat="granite"    title="Pink granite — the cliffs">Granite</button>
@@ -205,7 +279,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec sandbox-only">
       <div class="sec-title">Form</div>
       <div class="slider-row"><label for="winDensity">Windows</label><input id="winDensity" type="range" min="0.15" max="0.95" step="0.05" value="0.70"><span id="winDensityVal" class="val">70%</span></div>
       <div class="slider-row"><label for="roofPitch">Pitch</label><input id="roofPitch" type="range" min="10" max="60" step="1" value="42"><span id="roofPitchVal" class="val">42°</span></div>
@@ -219,7 +293,7 @@
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec sandbox-only">
       <div class="sec-title">World</div>
       <div class="slider-row"><label for="tod">Time</label><input id="tod" type="range" min="0" max="23.9" step="0.1" value="13.5"><span id="todVal" class="val">13:30</span></div>
       <div class="slider-row"><label for="rain">Rain</label><input id="rain" type="range" min="0" max="1" step="0.05" value="0.10"><span id="rainVal" class="val">10%</span></div>
@@ -282,6 +356,15 @@
         bleeds into dusk.
       </p>
 
+      <p>
+        <b style="color:var(--accent)">Parish mode</b> turns the argument into a game. Three terraced rows of plots climb inland
+        from the harbour; you start with £1,500 and the three everyday registers. Buildings house residents and pay into the
+        treasury at the end of each day — days roll past on their own, weather included, and a storm halves what the storehouses
+        bring in. Civic halls lift the whole parish's income. The <em>character</em> score rewards building in many registers
+        rather than one, and it is character — together with population — that unlocks the bow-fronts, the future register and
+        the granite-and-glass offices. Your parish saves itself in the browser.
+      </p>
+
       <footer>
         Editory — a project in residence. Source on GitHub. Press <kbd>?</kbd> to dismiss.
       </footer>
@@ -298,6 +381,6 @@
     }
   }
   </script>
-  <script type="module" src="./src/main.js?v=07"></script>
+  <script type="module" src="./src/main.js?v=08"></script>
 </body>
 </html>

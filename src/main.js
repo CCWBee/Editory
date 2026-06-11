@@ -2,14 +2,15 @@ import {
   THREE, renderer, scene, camera, controls,
   hemi, sun, ambient, sunDisc, sea, road, wall, sky,
   districtGroup, carsGroup, lampGroup, rainGroup, homeCam, onResize
-} from './scene.js?v=07';
+} from './scene.js?v=08';
 
 import {
   state, generateDistrict, updateRainAmount,
   sharedGlass, sharedLampHead, sharedHeadlight, sharedTaillight
-} from './generator.js?v=07';
+} from './generator.js?v=08';
 
-import { wireUI, updateSeedHash, logToPanel } from './ui.js?v=07';
+import { wireUI, updateSeedHash, logToPanel } from './ui.js?v=08';
+import { game, initParish, enterParish, exitParish, updateGame } from './game.js?v=08';
 
 const clock = new THREE.Clock();
 
@@ -224,6 +225,7 @@ function animate(){
   animateSea(t);
   if (rainGroup.children.length) animateRain(dt);
   animateCars(dt);
+  updateGame(dt);
 
   controls.update();
   renderer.render(scene, camera);
@@ -271,8 +273,37 @@ function boot(){
     }
   });
 
+  // Parish mode — city-builder layered on the generator
+  initParish({
+    updateAtmosphere,
+    updateRain: () => updateRainAmount(rainGroup),
+  });
+  const modeTabs = document.getElementById('modeTabs');
+  modeTabs.querySelectorAll('button').forEach(btn => {
+    btn.onclick = () => {
+      const mode = btn.dataset.mode;
+      if ((mode === 'parish') === game.active) return;
+      modeTabs.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+      if (mode === 'parish'){
+        document.body.classList.add('parish');
+        enterParish();
+      } else {
+        document.body.classList.remove('parish');
+        exitParish();
+        // Parish drove time and rain; hand control back to the sliders
+        state.env.timeOfDay = +document.getElementById('tod').value;
+        state.env.rain = +document.getElementById('rain').value;
+        updateRainAmount(rainGroup);
+        regen();
+        homeCam();
+        updateAtmosphere();
+      }
+    };
+  });
+
   addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (game.active && (e.key === 'g' || e.key === 'G' || e.key === 'r' || e.key === 'R')) return;
     if (e.key === 'g' || e.key === 'G'){ regen(); }
     else if (e.key === 'r' || e.key === 'R'){ state.seed = (Math.random()*1e9) >>> 0; regen(); }
     else if (e.key === 'f' || e.key === 'F'){ homeCam(); }
