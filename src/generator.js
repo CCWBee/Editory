@@ -4,7 +4,7 @@
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
 
 export const state = {
-  version: '0.8.0',
+  version: '0.9.0',
   seed: (Math.random()*1e9) >>> 0,
   env:    { timeOfDay: 13.5, rain: 0.1 },
   params: { preset: 'mix', winDensity: 0.7, roofPitch: 42, material: 'granite', age: 0.3, cars: 8, shutters: 'some' }

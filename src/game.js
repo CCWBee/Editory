@@ -1,35 +1,22 @@
-// Parish mode — a small city-builder layered on the Editory generator.
-// A grid of plots climbs inland from the harbour road. The player spends a
-// treasury on buildings drawn from the Neo-Anglo-Norman registers; buildings
-// house residents and earn income at each day's end. A "character" score —
-// the flame thesis made mechanical — gates the later registers.
+// Parish mode — the rendering and interaction layer of the city-builder.
+// All rules (money, people, weather odds, seasons, milestones) live in
+// economy.js so they can be simulated headlessly; this file owns the plots,
+// the meshes, the tools and the panel.
 import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
-import { scene, camera, renderer, controls, districtGroup } from './scene.js?v=08';
-import { state, makeBuilding, rngFor } from './generator.js?v=08';
+import { scene, camera, renderer, controls, districtGroup } from './scene.js?v=09';
+import { state, makeBuilding, rngFor, sharedGlass } from './generator.js?v=09';
+import {
+  TYPES, TYPE_ORDER, UNLOCKS, MILESTONES,
+  newParish, advanceDay, derive, ledger, unlocked, nextMilestone,
+  renovateCost, seasonOf, dayOfSeason, yearOf,
+  DEMOLISH_REFUND,
+} from './economy.js?v=09';
 
-const SAVE_KEY = 'editory.parish.v1';
-const DAY_SECONDS = 40;            // real seconds per game day at 1×
+const SAVE_KEY = 'editory.parish.v2';
+const DAY_SECONDS = 30;            // real seconds per game day at 1×
 const COLS = 9, ROWS = 3;
 const PLOT_W = 12, ROW_DEPTH = 17;
 const PLOT_MAX_W = PLOT_W - 1.4, PLOT_MAX_D = 12.5;
-
-export const TYPES = {
-  terrace: { label: 'Terrace',        cost: 240,  residents: 4, income: 7,  character: 6,
-             unlock: () => true,            req: '',             desc: 'Narrow attached homes — party walls, shared eaves' },
-  house:   { label: 'House',          cost: 380,  residents: 5, income: 10, character: 8,
-             unlock: () => true,            req: '',             desc: 'Detached, gabled, twin chimneys' },
-  store:   { label: 'Storehouse',     cost: 450,  residents: 0, income: 18, character: 5,
-             unlock: () => true,            req: '',             desc: 'Strong earner — storms halve its take' },
-  civic:   { label: 'Civic hall',     cost: 900,  residents: 0, income: 2,  character: 16,
-             unlock: g => g.population >= 18,  req: '18 residents', desc: '+8% to all parish income (up to three)' },
-  bow:     { label: 'Bow-front',      cost: 620,  residents: 6, income: 15, character: 12,
-             unlock: g => g.population >= 35,  req: '35 residents', desc: 'Painted Georgian seafront — the St Aubin register' },
-  future:  { label: 'Future house',   cost: 980,  residents: 7, income: 20, character: 14,
-             unlock: g => g.character >= 70,   req: '70 character', desc: 'Granite base, light upper — the flame carried forward' },
-  'granite-glass': { label: 'Granite + glass', cost: 1600, residents: 0, income: 48, character: 8,
-             unlock: g => g.population >= 60,  req: '60 residents', desc: 'Office register — the big earner' },
-};
-const TYPE_ORDER = ['terrace', 'house', 'store', 'civic', 'bow', 'future', 'granite-glass'];
 
 // Material draws per register — parish buildings choose their own palette
 const MAT_BY_TYPE = {
@@ -38,15 +25,15 @@ const MAT_BY_TYPE = {
   store:   ['granite', 'granite', 'slate'],
   civic:   ['render', 'granite'],
   bow:     ['render'],
+  pub:     ['render', 'granite'],
   future:  ['granite'],
   'granite-glass': ['granite'],
 };
 
 export const game = {
   active: false, speed: 1,
-  treasury: 1500, day: 1,
-  population: 0, character: 0,
-  weather: 'fair', rainTarget: 0.05,
+  s: newParish(),
+  rainTarget: 0.05,
   plots: [], tool: null,
   announced: new Set(),
 };
@@ -60,6 +47,7 @@ let rainApplied = -1;
 const $ = (id) => document.getElementById(id);
 const colX = (c) => (c - (COLS - 1) / 2) * PLOT_W;
 const plotFrontZ = (r) => 0.5 + r * ROW_DEPTH;
+const ageBucket = (age) => age < 0.3 ? 0 : age < 0.6 ? 1 : 2;
 
 // ---------- world ----------
 
@@ -86,7 +74,7 @@ function buildParishGround(){
       const mat = new THREE.MeshBasicMaterial({ color: 0xd6b07a, transparent: true, opacity: 0.0, depthWrite: false });
       const mesh = new THREE.Mesh(planeGeo, mat);
       mesh.position.set(colX(c), 0.03, plotFrontZ(r) + PLOT_MAX_D / 2 + 0.4);
-      const plot = { row: r, col: c, mesh, building: null, type: null, seed: 0 };
+      const plot = { row: r, col: c, mesh, buildingMesh: null, b: null, ageBucket: 0 };
       mesh.userData.plot = plot;
       game.plots.push(plot);
       plotMeshes.push(mesh);
@@ -95,127 +83,266 @@ function buildParishGround(){
   }
 }
 
-function paramsForType(type, rng){
+function plotOf(b){ return game.plots.find(p => p.row === b.row && p.col === b.col); }
+
+function paramsForType(type, rng, age){
   return {
     preset: type,
     winDensity: 0.6 + rng.rand() * 0.3,
     roofPitch: 38 + rng.int(12),
-    material: rng.pick(MAT_BY_TYPE[type]),
-    age: 0.08 + rng.rand() * 0.25,
+    material: rng.pick(MAT_BY_TYPE[type] || ['granite']),
+    age: Math.min(0.95, Math.max(0.05, age)),
     shutters: 'some',
   };
 }
 
-function constructBuilding(plot, type, seed){
-  const rng = rngFor(seed);
-  const params = paramsForType(type, rng);
-  const b = makeBuilding(rng, type, params, { maxW: PLOT_MAX_W, maxD: PLOT_MAX_D });
-  const { d } = b.userData.dims;
-  b.position.set(colX(plot.col), 0, plotFrontZ(plot.row) + d / 2 + 0.3);
-  districtGroup.add(b);
-  plot.building = b;
-  plot.type = type;
-  plot.seed = seed;
+// ---------- bespoke visuals: pub sign, côtil field, parish church ----------
+
+function addPubSign(mesh, rng){
+  const { w, d } = mesh.userData.dims;
+  const ink = new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.6, metalness: 0.4 });
+  const boardMat = new THREE.MeshStandardMaterial({
+    color: [0x113022, 0x162f4a, 0x5b1812, 0xa84c2a][rng.int(4)], roughness: 0.5,
+  });
+  const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.9), ink);
+  bracket.position.set(w / 2 - 1.0, 3.1, -d / 2 - 0.45);
+  mesh.add(bracket);
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.62, 0.78), boardMat);
+  board.position.set(w / 2 - 1.0, 2.68, -d / 2 - 0.55);
+  board.castShadow = true;
+  mesh.add(board);
 }
 
-function removeBuilding(plot){
-  if (!plot.building) return;
-  districtGroup.remove(plot.building);
-  plot.building = null;
-  plot.type = null;
-  plot.seed = 0;
+// A gabled slate prism, hand-rolled (the generator's roofs are bound to its
+// building groups, so small outbuildings carry their own).
+function gablePrism(w, d, baseY, ridgeH, mat){
+  const v = new Float32Array([
+    -w/2, baseY, -d/2,   w/2, baseY, -d/2,   w/2, baseY, d/2,   -w/2, baseY, d/2,
+     0,   baseY + ridgeH, -d/2,   0, baseY + ridgeH, d/2,
+  ]);
+  const i = new Uint16Array([0,3,5, 0,5,4,  1,4,5, 1,5,2,  0,1,4,  3,5,2]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  geo.setIndex(new THREE.BufferAttribute(i, 1));
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = m.receiveShadow = true;
+  return m;
 }
 
-// ---------- economy ----------
+function makeFieldVisual(rng, age){
+  const g = new THREE.Group();
+  const w = PLOT_W - 1.8, d = PLOT_MAX_D - 0.6;
+  g.userData.dims = { w, d };
 
-function recomputeStats(){
-  let pop = 0, char_ = 0;
-  const kinds = new Set();
-  for (const p of game.plots){
-    if (!p.type) continue;
-    pop += TYPES[p.type].residents;
-    char_ += TYPES[p.type].character;
-    kinds.add(p.type);
+  const soil = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, d),
+    new THREE.MeshStandardMaterial({ color: 0x4d3b27, roughness: 1 })
+  );
+  soil.rotation.x = -Math.PI / 2;
+  soil.position.y = 0.045;
+  soil.receiveShadow = true;
+  g.add(soil);
+
+  // Potato ridges — slightly tired rows when the field is left to age
+  const green = new THREE.Color(0x55703a).offsetHSL(0, -age * 0.25, -age * 0.05);
+  const cropMat = new THREE.MeshStandardMaterial({ color: green, roughness: 0.95 });
+  const rows = Math.floor((w - 3.6) / 1.15);
+  for (let i = 0; i < rows; i++){
+    const x = -w / 2 + 0.9 + i * 1.15;
+    const row = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.26 + rng.rand() * 0.14, d - 2.2), cropMat);
+    row.position.set(x, 0.18, 0);
+    row.castShadow = row.receiveShadow = true;
+    g.add(row);
   }
-  game.population = pop;
-  // Variety bonus — a parish of one register is a costume, not a language
-  game.character = char_ + kinds.size * 5;
-  checkUnlocks();
+
+  // Granite barn tucked on the open side
+  const stone = new THREE.MeshStandardMaterial({ color: new THREE.Color(0xc09c8a).offsetHSL(0, -age * 0.12, -age * 0.06), roughness: 0.92 });
+  const slate = new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.7 });
+  const bw = 3.2, bd = 4.4, bh = 2.3;
+  const bx = w / 2 - bw / 2 - 0.2, bz = -d / 2 + bd / 2 + 0.4;
+  const barn = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), stone);
+  barn.position.set(bx, bh / 2 + 0.05, bz);
+  barn.castShadow = barn.receiveShadow = true;
+  g.add(barn);
+  const roof = gablePrism(bw + 0.5, bd + 0.5, bh + 0.05, 1.0, slate);
+  roof.position.set(bx, 0, bz);
+  g.add(roof);
+  const door = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.3, 1.7),
+    new THREE.MeshStandardMaterial({ color: 0x2a1610, roughness: 0.6 })
+  );
+  door.position.set(bx, 0.9, bz - bd / 2 - 0.01);
+  door.rotation.y = Math.PI;
+  g.add(door);
+
+  return g;
 }
 
-function incomeMultiplier(){
-  const civics = game.plots.filter(p => p.type === 'civic').length;
-  return 1 + 0.08 * Math.min(3, civics);
-}
+function makeChurchVisual(rng, age){
+  const g = new THREE.Group();
+  const naveW = 5.6, naveD = 8.6, naveH = 4.2;
+  const towerS = 3.0, towerH = 8.2;
+  const d = naveD + towerS;
+  g.userData.dims = { w: Math.max(naveW, towerS) + 0.4, d };
 
-function estimateIncome(){
-  let inc = 0;
-  for (const p of game.plots){
-    if (!p.type) continue;
-    let v = TYPES[p.type].income;
-    if (game.weather === 'storm' && p.type === 'store') v = Math.round(v / 2);
-    inc += v;
+  const granite = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0xc7a08e).offsetHSL(0, -age * 0.14, -age * 0.07), roughness: 0.9,
+  });
+  const dressed = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0xd8b6a4).offsetHSL(0, -age * 0.1, -age * 0.04), roughness: 0.85,
+  });
+  const slate = new THREE.MeshStandardMaterial({ color: 0x363b46, roughness: 0.65 });
+
+  // Nave, behind the tower
+  const naveZ = -d / 2 + towerS + naveD / 2;
+  const nave = new THREE.Mesh(new THREE.BoxGeometry(naveW, naveH, naveD), granite);
+  nave.position.set(0, naveH / 2 + 0.05, naveZ);
+  nave.castShadow = nave.receiveShadow = true;
+  g.add(nave);
+  const naveRoof = gablePrism(naveW + 0.5, naveD + 0.4, naveH + 0.05, 2.0, slate);
+  naveRoof.position.set(0, 0, naveZ);
+  g.add(naveRoof);
+
+  // Square west tower with a low pyramid cap — the Jersey parish silhouette
+  const towerZ = -d / 2 + towerS / 2;
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(towerS, towerH, towerS), granite);
+  tower.position.set(0, towerH / 2 + 0.05, towerZ);
+  tower.castShadow = tower.receiveShadow = true;
+  g.add(tower);
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(towerS * 0.78, 2.6, 4), slate);
+  cap.position.set(0, towerH + 1.35, towerZ);
+  cap.rotation.y = Math.PI / 4;
+  cap.castShadow = true;
+  g.add(cap);
+
+  // Tall lancet windows along the nave; a west door in the tower
+  for (const sx of [-1, 1]){
+    for (let i = 0; i < 3; i++){
+      const win = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 1.9), sharedGlass);
+      win.position.set(sx * (naveW / 2 + 0.01), 2.2, naveZ - naveD / 2 + 1.6 + i * 2.6);
+      win.rotation.y = sx * Math.PI / 2;
+      g.add(win);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.1, 0.75), dressed);
+      frame.position.set(sx * (naveW / 2 - 0.01), 2.2, naveZ - naveD / 2 + 1.6 + i * 2.6);
+      g.add(frame);
+    }
   }
-  return Math.round(inc * incomeMultiplier());
+  const beltWin = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 1.1), sharedGlass);
+  beltWin.position.set(0, towerH - 1.4, towerZ - towerS / 2 - 0.01);
+  beltWin.rotation.y = Math.PI;
+  g.add(beltWin);
+  const door = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.3, 2.3),
+    new THREE.MeshStandardMaterial({ color: 0x2a1610, roughness: 0.55 })
+  );
+  door.position.set(0, 1.25, towerZ - towerS / 2 - 0.012);
+  door.rotation.y = Math.PI;
+  g.add(door);
+  const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.6, 0.1), dressed);
+  doorFrame.position.set(0, 1.35, towerZ - towerS / 2 + 0.04);
+  g.add(doorFrame);
+
+  return g;
 }
 
-function dayTick(){
-  const total = estimateIncome();
-  game.treasury += total;
-  game.day++;
+// ---------- construction ----------
 
-  // Roll tomorrow's weather
-  const r = Math.random();
-  if (r < 0.60){ game.weather = 'fair';    game.rainTarget = Math.random() * 0.10; }
-  else if (r < 0.85){ game.weather = 'drizzle'; game.rainTarget = 0.20 + Math.random() * 0.25; }
-  else { game.weather = 'storm'; game.rainTarget = 0.60 + Math.random() * 0.30; }
-
-  if (total > 0) log(`Day ${game.day} — collected £${total}`);
-  if (game.weather === 'storm') log('Storm over the harbour — storehouses earn half today');
-  checkUnlocks();
-  refreshUI();
-  save();
+function buildVisual(b){
+  const rng = rngFor(b.seed);
+  let mesh;
+  if (b.type === 'field') mesh = makeFieldVisual(rng, b.age);
+  else if (b.type === 'church') mesh = makeChurchVisual(rng, b.age);
+  else {
+    const visualPreset = b.type === 'pub' ? 'house' : b.type;
+    const params = paramsForType(b.type, rng, b.age);
+    mesh = makeBuilding(rng, visualPreset, params, { maxW: PLOT_MAX_W, maxD: PLOT_MAX_D });
+    if (b.type === 'pub') addPubSign(mesh, rng);
+  }
+  const { d } = mesh.userData.dims;
+  mesh.position.set(colX(b.col), 0, plotFrontZ(b.row) + d / 2 + 0.3);
+  districtGroup.add(mesh);
+  return mesh;
 }
 
-function checkUnlocks(){
-  for (const key of TYPE_ORDER){
-    if (TYPES[key].unlock(game) && !game.announced.has(key)){
-      game.announced.add(key);
-      if (TYPES[key].req) log(`Unlocked: ${TYPES[key].label}`);
+function attachBuilding(b){
+  const plot = plotOf(b);
+  plot.b = b;
+  plot.buildingMesh = buildVisual(b);
+  plot.ageBucket = ageBucket(b.age);
+}
+
+function detachBuilding(plot){
+  if (plot.buildingMesh) districtGroup.remove(plot.buildingMesh);
+  plot.buildingMesh = null;
+  plot.b = null;
+}
+
+// Rebuild any building whose weathering crossed a visual threshold — same
+// seed, so it's the same building, just older.
+function refreshAges(){
+  for (const plot of game.plots){
+    if (!plot.b) continue;
+    const nb = ageBucket(plot.b.age);
+    if (nb !== plot.ageBucket){
+      districtGroup.remove(plot.buildingMesh);
+      plot.buildingMesh = buildVisual(plot.b);
+      plot.ageBucket = nb;
     }
   }
 }
 
-// ---------- interaction ----------
+// ---------- tools ----------
 
-function affordable(type){ return game.treasury >= TYPES[type].cost; }
-function unlocked(type){ return TYPES[type].unlock(game); }
+function affordable(type){ return game.s.treasury >= TYPES[type].cost; }
 
 function tryBuild(plot){
   const type = game.tool;
-  if (!type || type === 'bulldoze') return;
-  if (plot.building){ log('That plot is occupied'); return; }
-  if (!unlocked(type)) return;
+  const s = game.s;
+  if (plot.b){ log('That plot is occupied'); return; }
+  if (!unlocked(type, s)) return;
   if (!affordable(type)){ log(`Need £${TYPES[type].cost} for a ${TYPES[type].label.toLowerCase()}`); return; }
 
-  game.treasury -= TYPES[type].cost;
-  constructBuilding(plot, type, (Math.random() * 1e9) >>> 0);
+  s.treasury -= TYPES[type].cost;
+  const b = { type, row: plot.row, col: plot.col, age: 0.05, seed: (Math.random() * 1e9) >>> 0 };
+  s.buildings.push(b);
+  attachBuilding(b);
   const t = TYPES[type];
-  log(t.residents > 0
-    ? `${t.label} built — ${t.residents} residents move in`
+  log(t.homes > 0 ? `${t.label} built — room for ${t.homes} residents`
+    : t.jobs > 0 ? `${t.label} built — ${t.jobs} jobs`
     : `${t.label} built`);
-  recomputeStats();
   refreshUI();
   save();
 }
 
 function tryDemolish(plot){
-  if (!plot.building) return;
-  const refund = Math.round(TYPES[plot.type].cost * 0.5);
-  log(`${TYPES[plot.type].label} demolished — £${refund} reclaimed`);
-  removeBuilding(plot);
-  game.treasury += refund;
-  recomputeStats();
+  if (!plot.b) return;
+  const s = game.s;
+  const refund = Math.round(TYPES[plot.b.type].cost * DEMOLISH_REFUND);
+  log(`${TYPES[plot.b.type].label} demolished — £${refund} reclaimed`);
+  s.buildings.splice(s.buildings.indexOf(plot.b), 1);
+  detachBuilding(plot);
+  s.treasury += refund;
+  // Evict anyone the parish can no longer house
+  const st = derive(s);
+  if (s.residents > st.homes) s.residents = st.homes;
+  refreshUI();
+  save();
+}
+
+function tryRenovate(plot){
+  if (!plot.b) return;
+  const s = game.s;
+  const b = plot.b;
+  if (b.age < 0.15){ log(`The ${TYPES[b.type].label.toLowerCase()} doesn't need it yet`); return; }
+  const cost = renovateCost(b.type);
+  if (s.treasury < cost){ log(`Renovation costs £${cost}`); return; }
+  s.treasury -= cost;
+  b.age = 0.05;
+  districtGroup.remove(plot.buildingMesh);
+  plot.buildingMesh = buildVisual(b);
+  plot.ageBucket = 0;
+  log(`${TYPES[b.type].label} renovated — fresh lime and pointing (−£${cost})`);
   refreshUI();
   save();
 }
@@ -231,14 +358,18 @@ function refreshPlotStyles(){
     const m = p.mesh.material;
     if (p === hovered && game.tool){
       if (game.tool === 'bulldoze'){
-        m.opacity = p.building ? 0.40 : 0.06;
+        m.opacity = p.b ? 0.40 : 0.06;
         m.color.set(0xd07b6b);
-      } else if (!p.building && unlocked(game.tool) && affordable(game.tool)){
+      } else if (game.tool === 'renovate'){
+        const ok = p.b && p.b.age >= 0.15 && game.s.treasury >= renovateCost(p.b.type);
+        m.opacity = p.b ? 0.40 : 0.06;
+        m.color.set(ok ? 0x7ab8d0 : 0xd07b6b);
+      } else if (!p.b && unlocked(game.tool, game.s) && affordable(game.tool)){
         m.opacity = 0.38; m.color.set(0x7bd0a9);
       } else {
         m.opacity = 0.30; m.color.set(0xd07b6b);
       }
-    } else if (game.tool && game.tool !== 'bulldoze' && !p.building){
+    } else if (game.tool && game.tool !== 'bulldoze' && game.tool !== 'renovate' && !p.b){
       m.opacity = 0.10; m.color.set(0xd6b07a);
     } else {
       m.opacity = 0.0;
@@ -274,6 +405,7 @@ function wirePointer(){
     const p = plotAt(e);
     if (!p) return;
     if (game.tool === 'bulldoze') tryDemolish(p);
+    else if (game.tool === 'renovate') tryRenovate(p);
     else tryBuild(p);
     refreshPlotStyles();
   });
@@ -285,6 +417,16 @@ function wirePointer(){
 
 // ---------- UI ----------
 
+function cardMeta(t){
+  const bits = [];
+  if (t.homes) bits.push(`⌂${t.homes}`);
+  if (t.jobs) bits.push(`⚒${t.jobs}`);
+  if (t.income) bits.push(`£${t.income}/d`);
+  if (t.amenity) bits.push(`♣${t.amenity}`);
+  bits.push(`★${t.character}`);
+  return bits.join(' · ');
+}
+
 function buildCards(){
   const grid = $('buildGrid');
   grid.innerHTML = '';
@@ -293,39 +435,58 @@ function buildCards(){
     const btn = document.createElement('button');
     btn.className = 'build-card';
     btn.dataset.type = key;
-    btn.title = t.desc;
+    btn.title = `${t.desc} — upkeep £${t.upkeep}/day`;
     btn.innerHTML =
       `<span class="bc-row"><span class="bc-name">${t.label}</span><span class="bc-cost">£${t.cost}</span></span>` +
-      `<span class="bc-row"><span class="bc-meta">${t.residents ? `⌂${t.residents} · ` : ''}£${t.income}/day</span>` +
-      `<span class="bc-req">${t.req}</span></span>`;
-    btn.onclick = () => { if (unlocked(key)) setTool(key); };
+      `<span class="bc-row"><span class="bc-meta">${cardMeta(t)}</span>` +
+      `<span class="bc-req">${UNLOCKS[key].req}</span></span>`;
+    btn.onclick = () => { if (unlocked(key, game.s)) setTool(key); };
     grid.appendChild(btn);
   }
 }
 
-function refreshUI(){
-  $('statTreasury').textContent = `£${game.treasury}`;
-  $('statPop').textContent = game.population;
-  $('statChar').textContent = game.character;
-  $('statDay').textContent = game.day;
+const WEATHER_LABEL = {
+  fair: 'Fair over the harbour',
+  drizzle: 'Drizzle off the Atlantic',
+  storm: 'Storm — batten down',
+};
 
-  const weatherLabel = { fair: 'Fair over the harbour', drizzle: 'Drizzle off the Atlantic', storm: 'Storm — batten down' }[game.weather];
-  $('statWeather').textContent = weatherLabel;
-  const inc = estimateIncome();
-  $('statIncome').textContent = inc > 0 ? `+£${inc}/day` : '';
+function refreshUI(){
+  const s = game.s;
+  const st = derive(s);
+  const led = ledger(s, st);
+
+  $('statTreasury').textContent = `£${s.treasury}`;
+  $('statTreasury').classList.toggle('bad', s.treasury < 0);
+  $('statPop').textContent = `${s.residents}/${st.homes}`;
+  $('statJobs').textContent = `${st.employed}/${st.jobs}`;
+  $('statHappy').textContent = s.happiness;
+  $('statChar').textContent = st.character;
+  $('statDay').textContent = `${dayOfSeason(s.day)}·${seasonOf(s.day).slice(0, 3)}·Y${yearOf(s.day)}`;
+
+  $('statWeather').textContent = `${WEATHER_LABEL[s.weather]} · day ${s.day}`;
+  $('statIncome').textContent = `${led.net >= 0 ? '+' : '−'}£${Math.abs(led.net)}/day`;
+  $('statIncome').classList.toggle('bad', led.net < 0);
+
+  const next = nextMilestone(s);
+  $('statGoal').textContent = next
+    ? `Next: ${next.label} — ${next.desc}`
+    : 'Royal Charter held — the flame is carried';
 
   $('toolLabel').textContent =
     game.tool === 'bulldoze' ? 'demolish — click a building'
+    : game.tool === 'renovate' ? 'renovate — click a weathered building'
     : game.tool ? `${TYPES[game.tool].label} — click a plot`
     : 'select a card';
 
   document.querySelectorAll('#buildGrid .build-card').forEach(btn => {
     const key = btn.dataset.type;
     btn.classList.toggle('active', game.tool === key);
-    btn.classList.toggle('locked', !unlocked(key));
-    btn.classList.toggle('broke', unlocked(key) && !affordable(key));
+    btn.classList.toggle('locked', !unlocked(key, s, st));
+    btn.classList.toggle('broke', unlocked(key, s, st) && !affordable(key));
   });
   $('btnBulldoze').classList.toggle('active', game.tool === 'bulldoze');
+  $('btnRenovate').classList.toggle('active', game.tool === 'renovate');
   document.querySelectorAll('#speedSeg button').forEach(b => {
     b.classList.toggle('active', +b.dataset.speed === game.speed);
   });
@@ -335,14 +496,26 @@ function log(msg){
   const ul = $('eventLog');
   if (!ul) return;
   const li = document.createElement('li');
+  if (msg.startsWith('★')) li.className = 'milestone';
   li.textContent = msg;
   ul.prepend(li);
-  while (ul.children.length > 6) ul.removeChild(ul.lastChild);
+  while (ul.children.length > 8) ul.removeChild(ul.lastChild);
+}
+
+function announceUnlocks(silent){
+  const st = derive(game.s);
+  for (const key of TYPE_ORDER){
+    if (unlocked(key, game.s, st) && !game.announced.has(key)){
+      game.announced.add(key);
+      if (!silent && UNLOCKS[key].req) log(`Unlocked: ${TYPES[key].label}`);
+    }
+  }
 }
 
 function wirePanel(){
   buildCards();
   $('btnBulldoze').onclick = () => setTool('bulldoze');
+  $('btnRenovate').onclick = () => setTool('renovate');
   document.querySelectorAll('#speedSeg button').forEach(b => {
     b.onclick = () => { game.speed = +b.dataset.speed; refreshUI(); };
   });
@@ -350,47 +523,55 @@ function wirePanel(){
     if (!confirm('Raze the parish and start again?')) return;
     localStorage.removeItem(SAVE_KEY);
     resetParish();
-    log('A new parish — £1500 in the treasury');
+    log('A new parish — £1,500 in the treasury');
     refreshUI();
   };
+}
+
+// ---------- weather presentation ----------
+
+function rainTargetFor(weather, rnd = Math.random){
+  if (weather === 'storm') return 0.65 + rnd() * 0.3;
+  if (weather === 'drizzle') return 0.22 + rnd() * 0.2;
+  return rnd() * 0.07;
 }
 
 // ---------- save / load ----------
 
 function save(){
   if (!game.active) return;
-  const data = {
-    treasury: game.treasury, day: game.day, weather: game.weather, rainTarget: game.rainTarget,
-    plots: game.plots.filter(p => p.type).map(p => ({ r: p.row, c: p.col, type: p.type, seed: p.seed })),
-  };
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode etc. */ }
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: 2, s: game.s })); } catch { /* private mode etc. */ }
 }
 
 function load(){
   let data;
   try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { return false; }
-  if (!data || !Array.isArray(data.plots)) return false;
-  game.treasury = data.treasury ?? 1500;
-  game.day = data.day ?? 1;
-  game.weather = data.weather ?? 'fair';
-  game.rainTarget = data.rainTarget ?? 0.05;
-  for (const s of data.plots){
-    const plot = game.plots.find(p => p.row === s.r && p.col === s.c);
-    if (plot && TYPES[s.type]) constructBuilding(plot, s.type, s.seed >>> 0);
-  }
+  if (!data || data.v !== 2 || !data.s || !Array.isArray(data.s.buildings)) return false;
+  game.s = Object.assign(newParish(), data.s);
+  game.s.flags = game.s.flags || {};
+  for (const b of game.s.buildings) attachBuilding(b);
   return true;
 }
 
 function resetParish(){
-  for (const p of game.plots) removeBuilding(p);
-  game.treasury = 1500;
-  game.day = 1;
-  game.weather = 'fair';
-  game.rainTarget = 0.05;
+  for (const p of game.plots) detachBuilding(p);
+  game.s = newParish();
   game.tool = null;
   game.announced = new Set();
-  recomputeStats();
+  announceUnlocks(true);
   refreshPlotStyles();
+}
+
+// ---------- the day tick ----------
+
+function dayTick(){
+  const { msgs } = advanceDay(game.s);
+  for (const m of msgs) log(m);
+  game.rainTarget = rainTargetFor(game.s.weather);
+  refreshAges();
+  announceUnlocks(false);
+  refreshUI();
+  save();
 }
 
 // ---------- mode switching & per-frame update ----------
@@ -408,15 +589,16 @@ export function enterParish(){
 
   // Parish owns the district group — clear the sandbox street
   while (districtGroup.children.length) districtGroup.remove(districtGroup.children[0]);
-  for (const p of game.plots){ p.building = null; p.type = null; }
+  for (const p of game.plots){ p.buildingMesh = null; p.b = null; }
 
   const hadSave = load();
   if (!hadSave) resetParish();
-  recomputeStats();
-  // Existing unlocks shouldn't re-announce on load
-  for (const key of TYPE_ORDER) if (TYPES[key].unlock(game)) game.announced.add(key);
+  announceUnlocks(true);
 
-  if (!hadSave) log('Welcome to the parish — pick a card, click a plot');
+  if (!hadSave){
+    log('Welcome to the parish — pick a card, click a plot');
+    log('Homes draw residents; jobs and a pub keep them; salt air takes its toll');
+  }
   refreshUI();
   refreshPlotStyles();
 
@@ -427,6 +609,7 @@ export function enterParish(){
 
   // Wake to morning if entering in the dead of night
   if (state.env.timeOfDay < 6 || state.env.timeOfDay > 21) state.env.timeOfDay = 8;
+  game.rainTarget = rainTargetFor(game.s.weather);
   state.env.rain = game.rainTarget;
   rainApplied = -1;
   cb.updateAtmosphere();
@@ -439,7 +622,7 @@ export function exitParish(){
   hovered = null;
   parishGroup.visible = false;
   refreshPlotStyles();
-  for (const p of game.plots){ p.building = null; p.type = null; }
+  for (const p of game.plots){ p.buildingMesh = null; p.b = null; }
   // caller regenerates the sandbox district
 }
 

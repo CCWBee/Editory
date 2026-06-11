@@ -31,6 +31,7 @@
         padding:12px;border:1px solid var(--line);border-radius:14px;
         box-shadow:0 12px 44px rgba(0,0,0,.55);
         display:flex;flex-direction:column;gap:10px;
+        max-height:calc(100vh - 28px);overflow-y:auto;
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif}
     #ui.hidden{display:none}
 
@@ -144,12 +145,15 @@
     body:not(.parish) .parish-only{display:none}
 
     /* --- parish stats --- */
-    .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center}
-    .stat .num{font-family:"SF Mono",Consolas,monospace;font-size:14px;color:var(--accent-bright);font-variant-numeric:tabular-nums}
-    .stat .lbl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--hint);margin-top:1px}
+    .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 2px;text-align:center}
+    .stat .num{font-family:"SF Mono",Consolas,monospace;font-size:13px;color:var(--accent-bright);font-variant-numeric:tabular-nums}
+    .stat .num.bad{color:#e08070}
+    .stat .lbl{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--hint);margin-top:1px}
     .weather-row{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--ink-dim);
       border-top:1px solid var(--line);padding-top:6px}
     .weather-row #statIncome{font-family:"SF Mono",Consolas,monospace;color:var(--good);font-size:11px}
+    .weather-row #statIncome.bad{color:#e08070}
+    .goal-row{font-size:10.5px;color:var(--accent);line-height:1.35;border-top:1px solid var(--line);padding-top:6px}
 
     /* --- build cards --- */
     .build-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px}
@@ -166,11 +170,14 @@
     .build-card.locked .bc-req{display:inline}
     .build-card.locked .bc-meta{display:none}
     #btnBulldoze.active{background:rgba(208,123,107,.18);border-color:#d07b6b;color:#f0b0a0}
+    #btnRenovate.active{background:rgba(122,184,208,.18);border-color:#7ab8d0;color:#b0d8e8}
+    #speedSeg{grid-template-columns:repeat(4,1fr)}
 
     /* --- event log --- */
     #eventLog{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;
       font-size:10.5px;color:var(--ink-dim);line-height:1.35}
     #eventLog li:first-child{color:var(--ink)}
+    #eventLog li.milestone{color:var(--accent-bright)}
     .sec-title .linkish{background:none;border:0;padding:0;color:var(--hint);font-size:10px;letter-spacing:.05em;
       text-transform:uppercase;cursor:pointer}
     .sec-title .linkish:hover{color:#d07b6b;transform:none}
@@ -205,22 +212,27 @@
     <div class="sec parish-only">
       <div class="stats-grid">
         <div class="stat"><div class="num" id="statTreasury">£1500</div><div class="lbl">treasury</div></div>
-        <div class="stat"><div class="num" id="statPop">0</div><div class="lbl">residents</div></div>
+        <div class="stat"><div class="num" id="statPop">0/0</div><div class="lbl">residents</div></div>
+        <div class="stat"><div class="num" id="statJobs">0/0</div><div class="lbl">jobs</div></div>
+        <div class="stat"><div class="num" id="statHappy">75</div><div class="lbl">happiness</div></div>
         <div class="stat"><div class="num" id="statChar">0</div><div class="lbl">character</div></div>
-        <div class="stat"><div class="num" id="statDay">1</div><div class="lbl">day</div></div>
+        <div class="stat"><div class="num" id="statDay">1·Spr·Y1</div><div class="lbl">date</div></div>
       </div>
       <div class="weather-row"><span id="statWeather">Fair over the harbour</span><span id="statIncome"></span></div>
+      <div class="goal-row" id="statGoal">Next: Vingtaine — 25 residents</div>
     </div>
 
     <div class="sec parish-only">
       <div class="sec-title">Build <em id="toolLabel">select a card</em></div>
       <div class="build-grid" id="buildGrid"></div>
       <div class="toolbar">
-        <button id="btnBulldoze" class="grow">Demolish</button>
-        <div class="segmented" id="speedSeg" style="flex:1.1">
+        <button id="btnRenovate" class="grow" title="Reset a building's weathering for a quarter of its cost">Renovate</button>
+        <button id="btnBulldoze" class="grow" title="Raze a building for half its cost back">Demolish</button>
+        <div class="segmented" id="speedSeg" style="flex:1.3">
           <button data-speed="0" title="Pause">⏸</button>
           <button data-speed="1" class="active" title="Normal speed">▶</button>
           <button data-speed="3" title="Fast">▶▶</button>
+          <button data-speed="6" title="Very fast">▶▶▶</button>
         </div>
       </div>
     </div>
@@ -358,11 +370,17 @@
 
       <p>
         <b style="color:var(--accent)">Parish mode</b> turns the argument into a game. Three terraced rows of plots climb inland
-        from the harbour; you start with £1,500 and the three everyday registers. Buildings house residents and pay into the
-        treasury at the end of each day — days roll past on their own, weather included, and a storm halves what the storehouses
-        bring in. Civic halls lift the whole parish's income. The <em>character</em> score rewards building in many registers
-        rather than one, and it is character — together with population — that unlocks the bow-fronts, the future register and
-        the granite-and-glass offices. Your parish saves itself in the browser.
+        from the harbour; you start with £1,500 and the everyday registers. Homes draw residents, workplaces need staffing,
+        and a pub, a church and a civic hall keep spirits up — happiness decides whether people arrive or leave for St Helier.
+        The salt air weathers every building, visibly, until you renovate it; the seafront pays better and suffers worse.
+      </p>
+
+      <p>
+        The year is Jersey's: the Royals are lifted from your côtils at the end of spring, summer brings tourists, Liberation Day
+        and the Battle of Flowers, autumn brings cider and the Visite Royale — which fines a shabby parish — and winter brings
+        the storms. The <em>character</em> score rewards building in many registers rather than one, and it gates the later
+        registers. Grow from hamlet to <em>Vingtaine</em> to <em>Parish status</em>, and carry the flame all the way to a
+        <em>Royal Charter</em>. Your parish saves itself in the browser.
       </p>
 
       <footer>
@@ -381,6 +399,6 @@
     }
   }
   </script>
-  <script type="module" src="./src/main.js?v=08"></script>
+  <script type="module" src="./src/main.js?v=09"></script>
 </body>
 </html>
