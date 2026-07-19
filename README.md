@@ -30,11 +30,14 @@ Or any equivalent static server.
 
 | Preset | What it builds |
 |---|---|
-| District mix | Mixed terrace, house, storehouse and civic across the row |
+| District mix | Blends all the registers across the row |
 | Terrace | Narrow attached units, party walls, shared eaves |
 | Contemporary house | Detached, larger openings, lower pitch |
 | Civic | Wider, symmetrical, with eaves cornice and quoins |
 | Coastal storehouse | Long plain gabled mass with a wide loading door |
+| Bow-front Georgian | Painted render with a shallow seafront bow |
+| Granite + glass | The Gov HQ register — vertical granite fins over glass |
+| Future register | Granite base, lighter upper, big windows |
 
 ## Keyboard
 
